@@ -1,0 +1,30 @@
+[tool.ruff]
+# Set the maximum line length
+line-length = 88
+
+# Assume Python 3.11 compatibility
+target-version = "py311"
+
+[tool.ruff.lint]
+# Enable the default set of rules from Pyflakes (F) and pycodestyle (E) errors.
+# Also enable isort (I) rules.
+select = ["E", "F", "W", "I"]
+
+# Never enforce `E501` (line too long) or `W191` (tab indentation)
+ignore = ["E501", "W191"]
+
+# Allow unused variables in `__init__.py`.
+# per-file-ignores = {"__init__.py" = ["F401"]}
+
+[tool.ruff.format]
+# Use double quotes for strings.
+quote-style = "double"
+
+# Use spaces for indentation.
+indent-style = "space"
+
+# Skip trailing comma when formatting magic trailing commas.
+skip-magic-trailing-comma = false
+
+# Set the line ending style (auto, lf, crlf, cr).
+line-ending = "auto" 
