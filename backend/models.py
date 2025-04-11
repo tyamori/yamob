@@ -1,4 +1,5 @@
 import numpy as np
+import rvo2 # RVO2 ライブラリをインポート
 
 # --- Geometry Helper Functions ---
 def point_segment_distance(p, a, b):
@@ -58,128 +59,250 @@ class Person:
     """
     人物エージェントを表すクラス。
     位置、速度、目的地、歩行速度、大きさなどの属性を持つ。
+    速度と位置の更新は Simulator (RVO2) が担当する。
     """
     def __init__(self, id, initial_position, speed, size, destination):
         self.id = id
         self.position = np.array(initial_position, dtype=float)
         self.speed = speed # 目標速度 (スカラー)
-        self.size = size # 半径など
+        self.size = size # 半径
         self.destination = np.array(destination, dtype=float)
-        self.velocity = np.zeros(len(initial_position), dtype=float) # 現在の速度ベクトル
-        self.path = [] # 計算された経路 (オプション)
-        # TODO: 状態 (例: 'moving', 'waiting', 'reached') などを追加検討
-
-    def update_velocity(self, dt, environment, other_persons):
-        """目的地や周囲の状況に応じて速度ベクトルを更新する"""
-        # TODO: 移動ロジック (例: Social Force Model, RVO) を実装
-        # とりあえず目的地に向かうベクトルを計算 (仮)
-        direction_to_destination = self.destination - self.position
-        distance = np.linalg.norm(direction_to_destination)
-
-        if distance < 0.1 * self.speed: # 目的地付近で減速・停止 (速度に応じた閾値)
-            self.velocity = direction_to_destination / dt # ピタッと止まるように
-            if np.linalg.norm(self.velocity) < 0.1:
-                 self.velocity = np.zeros_like(self.velocity)
-            # print(f"Person {self.id} reached destination.")
-            return
-
-        desired_velocity = (direction_to_destination / distance) * self.speed
-        steering = desired_velocity - self.velocity
-
-        # --- TODO: 他者からの反発力を追加 --- ここから
-        # repulsive_force = np.zeros_like(self.velocity)
-        # for other in other_persons:
-        #     # 他者との距離計算など
-        #     pass
-        # steering += repulsive_force
-        # --- TODO ここまで ----
-
-        # --- 速度・力の制限 (オプション) ---
-        # steering = np.clip(steering, -max_force, max_force) # 力の制限
-        # self.velocity += steering * dt # 質量1として加速度を適用
-        # # 速度制限
-        # speed_mag = np.linalg.norm(self.velocity)
-        # if speed_mag > self.speed:
-        #     self.velocity = (self.velocity / speed_mag) * self.speed
-
-        # 単純化: 直接 desired_velocity に近づける (急な方向転換を許容)
-        self.velocity = desired_velocity
-
-        print(f"Person {self.id} velocity updated to: {self.velocity}") # 仮実装
-
-    def move(self, dt, environment):
-        """速度ベクトルに基づいて位置を更新し、衝突判定を行う"""
-        if np.linalg.norm(self.velocity) < 1e-6: # ほぼ停止しているなら何もしない
-             return
-
-        potential_position = self.position + self.velocity * dt
-
-        # 移動先の位置が通行可能かチェック (自身のサイズを考慮)
-        if environment.is_accessible(potential_position, self.size):
-             self.position = potential_position
-        else:
-             # 衝突した場合、速度をゼロにする (シンプルな応答)
-             # print(f"Person {self.id} stopped due to collision near {potential_position}")
-             self.velocity = np.zeros_like(self.velocity)
-
-        print(f"Person {self.id} moved to: {self.position}") # 仮実装
+        self.velocity = np.zeros(len(initial_position), dtype=float) # 現在の速度ベクトル (RVOが更新)
+        # self.path = [] # 必要であれば
 
 class Simulator:
     """
     シミュレーション全体を管理するクラス。
-    シミュレーションループ、時間管理、各コンポーネントの連携を行う。
+    RVO2ライブラリを使用して衝突回避を行う。
     """
-    def __init__(self, environment, persons):
+    def __init__(self, environment, persons, dt=0.1):
         self.environment = environment
-        self.persons = {person.id: person for person in persons} # IDでアクセス可能に
+        self.persons = {} # person.id -> Person object
         self.time = 0.0
+        self.dt = dt
         self.is_running = False
+        self.person_id_to_rvo_agent_id = {}
+        self.rvo_agent_id_to_person_id = {}
 
-    def step(self, dt):
-        """シミュレーションを1ステップ進める"""
+        # RVOシミュレータの初期化
+        # パラメータ: timeStep, neighborDist, maxNeighbors, timeHorizon, timeHorizonObst, radius, maxSpeed
+        # これらの値は状況に応じて調整が必要
+        self.rvo_simulator = rvo2.PyRVOSimulator(
+            self.dt, 1.5, 5, 1.5, 2.0, 0.2, 1.5 # デフォルト値、必要なら調整
+        )
+        print(f"RVO Simulator created with timestep: {self.dt}")
+
+        # 環境の障害物をRVOに追加
+        self._add_environment_to_rvo()
+
+        # 初期人物エージェントをRVOに追加
+        for person in persons:
+            self.add_person(person)
+
+    def add_person(self, person):
+        """新しい人物をシミュレーションとRVOに追加する"""
+        if person.id in self.persons:
+            print(f"Warning: Person with ID {person.id} already exists.")
+            return
+
+        self.persons[person.id] = person
+
+        # RVOシミュレータにエージェントを追加
+        # addAgent(pos, neighborDist, maxNeighbors, timeHorizon, timeHorizonObst, radius, maxSpeed, velocity=(0,0))
+        try:
+            rvo_agent_id = self.rvo_simulator.addAgent(
+                tuple(person.position),
+                neighborDist=5.0, # 個々のエージェントで設定可能だが、Simulatorのデフォルトを使うことも多い
+                maxNeighbors=10,
+                timeHorizon=1.5,
+                timeHorizonObst=2.0,
+                radius=person.size,
+                maxSpeed=person.speed,
+                velocity=(0.0, 0.0) # 初期速度はゼロ
+            )
+            self.person_id_to_rvo_agent_id[person.id] = rvo_agent_id
+            self.rvo_agent_id_to_person_id[rvo_agent_id] = person.id
+            print(f"Added Person {person.id} to RVO Simulator with agent ID {rvo_agent_id}")
+        except Exception as e:
+            print(f"Error adding agent {person.id} to RVO: {e}")
+
+
+    def _add_environment_to_rvo(self):
+        """Environmentオブジェクトから壁と障害物をRVOシミュレータに追加する"""
+        obstacle_vertices_list = []
+
+        # 1. 壁をポリゴンとして追加 (細い長方形で表現)
+        wall_thickness = 0.1 # 壁の厚み (RVOは体積を持つ障害物を想定)
+        for start, end in self.environment.np_walls:
+            direction = end - start
+            length = np.linalg.norm(direction)
+            if length < 1e-6: continue
+            unit_direction = direction / length
+            # 壁に垂直なベクトル
+            normal = np.array([-unit_direction[1], unit_direction[0]]) * (wall_thickness / 2.0)
+
+            # 壁の4頂点を計算 (反時計回り)
+            v1 = start + normal
+            v2 = end + normal
+            v3 = end - normal
+            v4 = start - normal
+            # RVOライブラリはタプルのリストを受け入れる
+            obstacle_vertices_list.append([tuple(v) for v in [v1, v2, v3, v4]])
+
+        # 2. 円形障害物をポリゴンとして追加 (正多角形で近似)
+        num_circle_vertices = 16 # 円を近似する頂点数
+        for center, radius in self.environment.np_obstacles:
+            vertices = []
+            for i in range(num_circle_vertices):
+                angle = 2.0 * np.pi * i / num_circle_vertices
+                # RVOは障害物の「内側」を定義するため、半径をそのまま使うか、少し大きめに取るか検討
+                # ここでは半径をそのまま使用し、エージェント半径との組み合わせで回避することを期待
+                # 必要であれば radius + wall_thickness / 2.0 のように少し広げる
+                x = center[0] + radius * np.cos(angle)
+                y = center[1] + radius * np.sin(angle)
+                vertices.append((x, y))
+            # 頂点リストを反時計回りに並べる (sin/cosの定義から自然に反時計回りになる)
+            obstacle_vertices_list.append(vertices)
+
+        # RVOに障害物を追加
+        print(f"Adding {len(obstacle_vertices_list)} obstacles to RVO Simulator.")
+        for vertices in obstacle_vertices_list:
+             try:
+                 # addObstacleは頂点のリスト(タプルのリスト)を受け取る
+                 self.rvo_simulator.addObstacle(vertices)
+             except Exception as e:
+                 print(f"Error adding obstacle to RVO: {vertices}, Error: {e}")
+
+
+        # 障害物情報を処理して、内部データ構造(k-D木など)を構築
+        try:
+            self.rvo_simulator.processObstacles()
+            print("RVO obstacles processed.")
+        except Exception as e:
+            print(f"Error processing RVO obstacles: {e}")
+
+
+    def step(self):
+        """シミュレーションを1ステップ進める (RVOを使用)"""
         if not self.is_running:
             return
 
-        # 1. 各Personの速度を更新
-        all_persons = list(self.persons.values())
-        for person in all_persons:
-            # 自分以外のPersonリストを作成 (衝突回避用)
-            other_persons = [p for p in all_persons if p.id != person.id]
-            person.update_velocity(dt, self.environment, other_persons)
+        # 0. RVOのタイムステップを設定 (通常は init で設定した値で固定)
+        self.rvo_simulator.setTimeStep(self.dt) # 毎ステップ呼ぶ必要はないかもしれないが、念のため
 
-        # 2. 各Personの位置を更新
-        for person in all_persons:
-            person.move(dt, self.environment)
+        # 1. 各エージェントの目標速度 (Preferred Velocity) を設定
+        for person_id, person in self.persons.items():
+            if person_id not in self.person_id_to_rvo_agent_id:
+                continue # RVOに追加されていないエージェントはスキップ
 
-        self.time += dt
-        print(f"--- Simulation time: {self.time:.2f} ---")
+            rvo_agent_id = self.person_id_to_rvo_agent_id[person_id]
+
+            # RVOから現在位置を取得 (Personオブジェクトの位置と同期させるため)
+            # または、Personオブジェクトの位置を信頼する (stepの最後で更新されるため)
+            # ここではPersonオブジェクトの位置を使う
+            current_pos = person.position
+            direction_to_destination = person.destination - current_pos
+            distance = np.linalg.norm(direction_to_destination)
+
+            pref_vel = (0.0, 0.0) # デフォルトは停止
+            # 目的地に十分近づいたら停止させる
+            arrival_threshold = person.size * 1.5 # 半径の1.5倍程度を到着閾値とする
+            if distance > arrival_threshold:
+                # 目的地への方向ベクトルを正規化し、目標速度を掛ける
+                pref_vel_np = (direction_to_destination / distance) * person.speed
+                pref_vel = tuple(pref_vel_np)
+            # else: # 閾値以下なら目標速度ゼロ (停止)
+            #    pass # pref_vel は (0.0, 0.0) のまま
+
+
+            try:
+                # PyRVOSimulator インスタンスのメソッドを呼び出す
+                self.rvo_simulator.setAgentPrefVelocity(rvo_agent_id, pref_vel)
+            except Exception as e:
+                 print(f"Error setting preferred velocity for agent {rvo_agent_id} (Person {person_id}): {e}")
+
+
+        # 2. RVOシミュレーションステップを実行 (衝突回避計算)
+        try:
+            self.rvo_simulator.doStep()
+        except Exception as e:
+            print(f"Error during RVO doStep: {e}")
+            # 必要に応じてエラー処理を追加
+            return
+
+        # 3. RVOが計算した新しい速度と位置を取得してPersonオブジェクトを更新
+        all_reached = True if self.persons else True # 人がいなければ到達済みとする
+        for rvo_agent_id, person_id in self.rvo_agent_id_to_person_id.items():
+            if person_id not in self.persons:
+                continue
+
+            person = self.persons[person_id]
+            try:
+                # RVOライブラリが内部で位置も更新しているため、それを取得する
+                new_position_tuple = self.rvo_simulator.getAgentPosition(rvo_agent_id)
+                new_velocity_tuple = self.rvo_simulator.getAgentVelocity(rvo_agent_id)
+
+                person.position = np.array(new_position_tuple)
+                person.velocity = np.array(new_velocity_tuple)
+
+                # 目的地到達判定 (より厳密に)
+                distance_to_dest = np.linalg.norm(person.destination - person.position)
+                if distance_to_dest > arrival_threshold: # まだ到着していない人がいるか
+                     all_reached = False
+
+            except Exception as e:
+                 print(f"Error getting state for agent {rvo_agent_id} (Person {person_id}): {e}")
+
+        # RVOシミュレータの内部時間を取得して同期
+        self.time = self.rvo_simulator.getGlobalTime()
+        # print(f"--- Simulation time: {self.time:.2f} ---")
+
+        # オプション: 全員が目的地に到達したら停止
+        if all_reached and len(self.persons) > 0:
+            print("All persons seem to have reached their destinations.")
+            self.stop() # 自動停止させる場合
 
     def start(self):
         """シミュレーションを開始"""
-        self.is_running = True
-        print("Simulation started.")
+        if not self.is_running:
+             # RVOシミュレータの状態もリセットする必要があるか確認
+             # 必要であれば、ここでエージェントや障害物を再設定する
+             # print("Resetting RVO simulator state if necessary...")
+             self.is_running = True
+             print("Simulation started.")
+        else:
+             print("Simulation is already running.")
+
 
     def stop(self):
         """シミュレーションを停止"""
-        self.is_running = False
-        print("Simulation stopped.")
+        if self.is_running:
+            self.is_running = False
+            print("Simulation stopped.")
+        else:
+            print("Simulation is not running.")
 
     def get_state(self):
         """現在のシミュレーション状態を返す (API用)"""
-        return {
-            "time": self.time,
-            "persons": [
+        # persons リスト内包表記の前に self.persons が空でないかチェックするとより安全
+        persons_state = []
+        if self.persons:
+            persons_state = [
                 {
                     "id": p.id,
                     "position": p.position.tolist(),
-                    "velocity": p.velocity.tolist(),
-                    "destination": p.destination.tolist()
-                    # 必要に応じて他の情報も追加
+                    "velocity": p.velocity.tolist(), # RVOによって更新された速度
+                    "destination": p.destination.tolist(),
+                    "size": p.size,
+                    "speed": p.speed
                 }
                 for p in self.persons.values()
-            ],
+            ]
+
+        return {
+            "time": self.time,
+            "persons": persons_state,
             "is_running": self.is_running,
-            # 環境情報も追加
             "environment": {
                 "walls": self.environment.walls,
                 "obstacles": self.environment.obstacles

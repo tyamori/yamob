@@ -1,3 +1,7 @@
+import eventlet
+# 他のどのimportよりも先にモンキーパッチを実行
+eventlet.monkey_patch()
+
 import time
 import threading
 from flask import Flask, jsonify, request
@@ -5,10 +9,9 @@ from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from models import DataLoader, Simulator
 import copy
-import eventlet
 
 # eventlet によるモンキーパッチ (標準ライブラリのブロッキング操作をノンブロッキングに)
-eventlet.monkey_patch()
+# eventlet.monkey_patch() # ← ここから移動
 
 # --- Flask アプリケーション設定 ---
 app = Flask(__name__)
@@ -21,10 +24,13 @@ loader = DataLoader()
 environment = loader.load_environment()
 persons = loader.load_persons(num_persons=10)
 
+# SIMULATION_DT を Simulator 初期化の前に定義する
+SIMULATION_DT = 0.05 # シミュレーションの時間刻み (秒)
+
 simulator_lock = threading.Lock()
-simulator = Simulator(environment, persons)
+# Simulator の初期化時に dt を渡す
+simulator = Simulator(environment, persons, dt=SIMULATION_DT)
 simulation_thread = None
-SIMULATION_DT = 0.05
 
 def simulation_loop():
     """バックグラウンドでシミュレーションを実行し、状態を WebSocket で emit するループ"""
@@ -41,7 +47,7 @@ def simulation_loop():
             if not simulator.is_running:
                 print("Simulator is not running, exiting loop.")
                 break
-            simulator.step(SIMULATION_DT)
+            simulator.step()
             # emit 間隔に基づいて状態を取得
             current_time = time.time()
             if current_time - last_emit_time >= EMIT_INTERVAL:
@@ -87,7 +93,8 @@ def update_config():
     with simulator_lock:
         environment = loader.load_environment() # 再読み込み (ダミー)
         persons = loader.load_persons(num_persons=num_persons) # 再読み込み (ダミー)
-        simulator = Simulator(environment, persons)
+        # Simulator の初期化時に dt を渡す
+        simulator = Simulator(environment, persons, dt=SIMULATION_DT)
         print("Simulator re-initialized with new config.")
 
     return jsonify({"message": "Configuration updated and simulator reset.", "num_persons": num_persons})
@@ -165,7 +172,8 @@ def reset_simulation():
         num_persons = len(simulator.persons) # リセット前の人数を引き継ぐ
         environment = loader.load_environment()
         persons = loader.load_persons(num_persons=num_persons)
-        simulator = Simulator(environment, persons)
+        # Simulator の初期化時に dt を渡す
+        simulator = Simulator(environment, persons, dt=SIMULATION_DT)
         print("Simulator reset to initial state.")
 
     return jsonify({"message": "Simulator reset."})

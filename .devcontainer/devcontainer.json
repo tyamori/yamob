@@ -8,6 +8,12 @@
 	"features": {
 		"ghcr.io/devcontainers/features/node:1": {
 			"version": "lts"
+		},
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installCMake": true,
+			"installOhMyZsh": false,
+			"upgradePackages": true,
+			"configureZshAsDefaultShell": false
 		}
 	},
 
@@ -15,7 +21,7 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "pip install --user -r requirements.txt",
+	"postCreateCommand": "apt-get update && apt-get install -y cmake build-essential && pip install --no-cache-dir Cython && pip install --no-cache-dir -r requirements.txt",
 
 	// Configure tool-specific properties.
 	"customizations": {
