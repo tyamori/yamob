@@ -17,7 +17,7 @@ import copy
 app = Flask(__name__)
 # SocketIO の設定を追加 (CORS を許可)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
-# CORS(app) # Flask-CORS は SocketIO が処理するので不要になることが多い
+CORS(app) # コメント解除して Flask アプリ全体で CORS を有効化
 
 # --- シミュレーターとスレッド管理 ---
 loader = DataLoader()
@@ -97,84 +97,101 @@ def update_config():
         simulator = Simulator(environment, persons, dt=SIMULATION_DT)
         print("Simulator re-initialized with new config.")
 
+    # 再初期化後の状態を取得
+    current_state = simulator.get_state()
+    # 再初期化後の状態をemit
+    socketio.emit('simulation_state_update', current_state)
+    print("Emitted state after config update.")
     return jsonify({"message": "Configuration updated and simulator reset.", "num_persons": num_persons})
 
 @app.route('/api/simulation/start', methods=['POST'])
 def start_simulation():
     global simulation_thread, simulator
     print("Attempting to start simulation...")
+    state_changed = False
+    current_state = None
     with simulator_lock:
-        if simulator.is_running:
+        if not simulator.is_running:
+            simulator.is_running = True
+            simulation_thread = threading.Thread(target=simulation_loop, daemon=True)
+            simulation_thread.start()
+            print("Simulation thread initiated.")
+            state_changed = True
+            current_state = simulator.get_state() # 開始直後の状態
+        else:
             print("Simulation is already running.")
-            return jsonify({"message": "Simulation is already running."}), 400 # Bad Request
+            current_state = simulator.get_state() # 実行中の状態
 
-        # 既にスレッドが存在しないか確認 (念のため)
-        if simulation_thread is not None and simulation_thread.is_alive():
-             print("Existing thread found, attempting to stop it first...")
-             simulator.is_running = False # ループ停止フラグを立てる
-             # ここで join するべきか？ start リクエストがブロックされる可能性
-             # join しないと古いスレッドが残り続ける？ -> stop 側で join する設計にする
-             # simulation_thread.join(timeout=1.0)
-             # if simulation_thread.is_alive():
-             #     print("Warning: Old simulation thread did not exit gracefully.")
-             # simulation_thread = None
-             # このアプローチは複雑なので、一旦 is_running フラグのみで制御
+    # 状態が変わった場合、または常に現在の状態を返すために emit
+    if current_state:
+        socketio.emit('simulation_state_update', current_state)
+        print(f"Emitted state after start request. is_running: {current_state['is_running']}")
 
-        simulator.is_running = True
-        simulation_thread = threading.Thread(target=simulation_loop, daemon=True) # デーモンスレッドにする
-        simulation_thread.start()
-        print("Simulation thread initiated.")
-
-    return jsonify({"message": "Simulation started."})
+    if state_changed:
+        return jsonify({"message": "Simulation started."})
+    else:
+        return jsonify({"message": "Simulation is already running."}), 400
 
 @app.route('/api/simulation/stop', methods=['POST'])
 def stop_simulation():
     print("Attempting to stop simulation...")
     stop_running_simulation()
-    return jsonify({"message": "Simulation stopped."})
+    return jsonify({"message": "Simulation stop requested."})
 
 def stop_running_simulation():
-    """実行中のシミュレーションスレッドを停止するヘルパー関数"""
+    """実行中のシミュレーションスレッドを停止し、状態をemitするヘルパー関数"""
     global simulation_thread, simulator
     thread_to_join = None
+    state_changed = False
     with simulator_lock:
-        if not simulator.is_running and (simulation_thread is None or not simulation_thread.is_alive()):
+        if simulator.is_running: # 実行中なら停止処理
+            print("Setting is_running to False.")
+            simulator.is_running = False
+            state_changed = True
+            if simulation_thread is not None:
+                thread_to_join = simulation_thread
+        else:
             print("Simulation already stopped or no thread running.")
-            return # 既に止まっているかスレッドがない
-
-        print("Setting is_running to False.")
-        simulator.is_running = False
-        if simulation_thread is not None:
-            thread_to_join = simulation_thread # join はロックの外で行う
 
     if thread_to_join is not None:
         print(f"Waiting for simulation thread ({thread_to_join.ident}) to join...")
-        thread_to_join.join(timeout=2.0) # タイムアウト付きで待機
+        thread_to_join.join(timeout=2.0)
         if thread_to_join.is_alive():
             print(f"Warning: Simulation thread ({thread_to_join.ident}) did not stop within timeout.")
         else:
             print(f"Simulation thread ({thread_to_join.ident}) joined successfully.")
-        # スレッド参照をクリア (新しいスレッドを安全に開始できるように)
         if simulation_thread is thread_to_join:
              simulation_thread = None
-    else:
-        print("No active simulation thread to join.")
+
+    # 状態が変更されたか、現在の状態を返すために emit
+    with simulator_lock:
+        current_state = simulator.get_state() # 最新の状態を取得
+    socketio.emit('simulation_state_update', current_state)
+    print(f"Emitted state after stop attempt. is_running: {current_state['is_running']}")
+    # この関数は他のエンドポイントから呼ばれるのでここでは return しない
 
 @app.route('/api/simulation/reset', methods=['POST'])
 def reset_simulation():
     global simulator, environment, persons, loader, simulation_thread
     print("Attempting to reset simulation...")
 
-    # 既存のスレッドを停止
+    # 既存のスレッドを停止 (内部で emit される)
     stop_running_simulation()
 
     with simulator_lock:
-        num_persons = len(simulator.persons) # リセット前の人数を引き継ぐ
+        # リセット前の人数を引き継ぐか、固定値にするかなどを検討
+        # ここでは直前の人数を引き継ぐ
+        num_persons = len(simulator.persons) if simulator else 10
         environment = loader.load_environment()
         persons = loader.load_persons(num_persons=num_persons)
-        # Simulator の初期化時に dt を渡す
         simulator = Simulator(environment, persons, dt=SIMULATION_DT)
         print("Simulator reset to initial state.")
+        # リセット直後の状態を取得
+        current_state = simulator.get_state() # is_running=False のはず
+
+    # リセット後の状態を emit (stop_running_simulation でも emit されるが念のため)
+    socketio.emit('simulation_state_update', current_state)
+    print("Emitted state after reset.")
 
     return jsonify({"message": "Simulator reset."})
 
@@ -182,8 +199,6 @@ def reset_simulation():
 def get_simulation_state():
     """現在のシミュレーション状態を返す (スレッドセーフ)"""
     with simulator_lock:
-        # 状態オブジェクトをコピーして返すか、get_state内で安全に構築する
-        # ここでは get_state が辞書を返すので、それをそのまま返す
         state = simulator.get_state()
     return jsonify(state)
 
@@ -191,10 +206,10 @@ def get_simulation_state():
 @socketio.on('connect')
 def handle_connect():
     print(f'Client connected: {request.sid}')
-    # 接続時に現在の状態を送ることも可能
-    # with simulator_lock:
-    #     state = simulator.get_state()
-    # emit('simulation_state_update', state, to=request.sid)
+    # 接続時に現在の状態を送る
+    with simulator_lock:
+        state = simulator.get_state()
+    emit('simulation_state_update', state, to=request.sid)
 
 @socketio.on('disconnect')
 def handle_disconnect():
