@@ -1,46 +1,69 @@
 import time
 import threading
 from flask import Flask, jsonify, request
-from flask_cors import CORS # CORS対応のため追加
+from flask_cors import CORS
+from flask_socketio import SocketIO, emit
 from models import DataLoader, Simulator
-import copy # For deep copying state if needed
+import copy
+import eventlet
+
+# eventlet によるモンキーパッチ (標準ライブラリのブロッキング操作をノンブロッキングに)
+eventlet.monkey_patch()
 
 # --- Flask アプリケーション設定 ---
 app = Flask(__name__)
-CORS(app) # すべてのオリジンからのリクエストを許可 (開発用)
+# SocketIO の設定を追加 (CORS を許可)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# CORS(app) # Flask-CORS は SocketIO が処理するので不要になることが多い
 
 # --- シミュレーターとスレッド管理 ---
 loader = DataLoader()
-environment = loader.load_environment() # 初期環境 (ダミー)
-persons = loader.load_persons(num_persons=10) # 初期人数 (ダミー)
+environment = loader.load_environment()
+persons = loader.load_persons(num_persons=10)
 
-simulator_lock = threading.Lock() # Simulatorインスタンスへのアクセスを保護
-# simulatorインスタンスは可変なので、ロック内でアクセスする
+simulator_lock = threading.Lock()
 simulator = Simulator(environment, persons)
 simulation_thread = None
-SIMULATION_DT = 0.05 # シミュレーションの時間ステップ (秒) - 20 FPS相当
+SIMULATION_DT = 0.05
 
 def simulation_loop():
-    """バックグラウンドでシミュレーションを実行するループ"""
-    global simulator # グローバル変数 simulator を参照
+    """バックグラウンドでシミュレーションを実行し、状態を WebSocket で emit するループ"""
+    global simulator, socketio
     print("Simulation thread started.")
+    last_emit_time = time.time()
+    EMIT_INTERVAL = 0.1 # 状態を emit する間隔 (秒) - 約10 FPS
+
     while True:
+        loop_start_time = time.time()
+        state_to_emit = None # emit する状態を格納する変数
+
         with simulator_lock:
             if not simulator.is_running:
                 print("Simulator is not running, exiting loop.")
-                break # is_runningがFalseになったらループを抜ける
-            current_time = simulator.time # スリープ前に時間を取得
+                break
             simulator.step(SIMULATION_DT)
+            # emit 間隔に基づいて状態を取得
+            current_time = time.time()
+            if current_time - last_emit_time >= EMIT_INTERVAL:
+                 state_to_emit = simulator.get_state() # emit する状態を取得
+                 last_emit_time = current_time
 
-        # ループの周期を維持するためのスリープ
-        # stepの実行時間を考慮するとより正確になるが、まずは単純なsleep
-        sleep_time = SIMULATION_DT
-        # print(f"Loop step done, sleeping for {sleep_time:.3f}s")
-        time.sleep(sleep_time)
+        # ロックの外で emit を行う (emit はブロッキングする可能性があるため)
+        if state_to_emit:
+            # 'simulation_state_update' というイベント名で状態を送信
+            socketio.emit('simulation_state_update', state_to_emit)
+            # print(f"Emitted state at time {state_to_emit['time']:.2f}")
+
+        # ループの実行時間を考慮してスリープ時間を計算
+        loop_end_time = time.time()
+        elapsed_time = loop_end_time - loop_start_time
+        sleep_time = max(0, SIMULATION_DT - elapsed_time)
+        # time.sleep(sleep_time) # eventlet を使う場合は socketio.sleep が推奨される
+        socketio.sleep(sleep_time)
+
     print("Simulation thread finished.")
 
-# --- API エンドポイント ---
-
+# --- API エンドポイント (変更なし、ただし state から step 削除) ---
 @app.route('/api/config', methods=['GET'])
 def get_config():
     with simulator_lock:
@@ -156,8 +179,24 @@ def get_simulation_state():
         state = simulator.get_state()
     return jsonify(state)
 
-# --- アプリケーション実行 ---
+# --- SocketIO イベントハンドラ (接続/切断など、必要に応じて追加) ---
+@socketio.on('connect')
+def handle_connect():
+    print(f'Client connected: {request.sid}')
+    # 接続時に現在の状態を送ることも可能
+    # with simulator_lock:
+    #     state = simulator.get_state()
+    # emit('simulation_state_update', state, to=request.sid)
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print(f'Client disconnected: {request.sid}')
+
+# --- アプリケーション実行 (socketio.run に変更) ---
 if __name__ == '__main__':
-    print("Starting Flask app...")
-    # use_reloader=False: デバッグモードでリローダーが複数スレッドを生成するのを防ぐ
-    app.run(debug=True, host='0.0.0.0', port=5001, use_reloader=False) 
+    print("Starting Flask-SocketIO app with eventlet...")
+    # host='0.0.0.0' を指定して外部からの接続を受け付ける
+    # port は 5001 のまま
+    socketio.run(app, host='0.0.0.0', port=5001, debug=False)
+    # 注意: Flask-SocketIO + eventlet/gevent では Flask の debug=True は推奨されない
+    # リローダーは use_reloader=False 相当になるはず 

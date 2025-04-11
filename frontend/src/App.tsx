@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import io, { Socket } from 'socket.io-client';
 import './App.css';
 import SimulationCanvas from './components/SimulationCanvas';
 import ControlPanel from './components/ControlPanel';
@@ -40,7 +41,8 @@ interface SimulationState {
 }
 // --- 型定義ここまで ---
 
-const API_BASE_URL = 'http://localhost:5001/api';
+// Socket.IO サーバーの URL (バックエンドと同じポート)
+const SOCKET_SERVER_URL = 'http://localhost:5001';
 
 function App() {
   // 初期状態を定義
@@ -52,45 +54,60 @@ function App() {
       environment: initialEnvironment
   };
   const [simulationState, setSimulationState] = useState<SimulationState>(initialSimulationState);
-  const [fetchIntervalId, setFetchIntervalId] = useState<NodeJS.Timeout | null>(null);
-
-  const fetchSimulationState = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/simulation/state`);
-      if (!response.ok) {
-        console.error(`HTTP error! status: ${response.status}`);
-        return;
-      }
-      // バックエンドからの生のデータを取得
-      const rawData = await response.json();
-
-      // 生データをフロントエンド用の構造化データに変換
-      const formattedData: SimulationState = {
-          time: rawData.time,
-          persons: rawData.persons, // persons はそのまま使える想定
-          is_running: rawData.is_running,
-          environment: {
-              // walls: [[[x,y],[x,y]], ...] -> [{start:{position:[x,y]}, end:{...}}, ...]
-              walls: rawData.environment.walls.map((w: RawWallData) => ({ start: { position: w[0] }, end: { position: w[1] } })),
-              // obstacles: [[x,y,r], ...] -> [{center:{position:[x,y]}, radius:r}, ...]
-              obstacles: rawData.environment.obstacles.map((o: RawObstacleData) => ({ center: { position: [o[0], o[1]] }, radius: o[2] }))
-          }
-      };
-      setSimulationState(formattedData);
-    } catch (error) {
-      console.error("Failed to fetch simulation state:", error);
-    }
-  };
+  // Socket インスタンスを保持するための ref
+  const socketRef = useRef<Socket | null>(null);
+  // API から受け取るデータ型の any を回避するための Raw 型 (より厳密に定義も可能)
+  type RawSimulationState = Omit<SimulationState, 'environment'> & { environment: { walls: [number,number][][], obstacles: [number,number,number][] } };
 
   useEffect(() => {
-    fetchSimulationState(); // 初回取得
-    const intervalId = setInterval(fetchSimulationState, 100); // ポーリング開始
-    setFetchIntervalId(intervalId);
+    // Socket.IO サーバーに接続
+    // 既に接続済み、または接続試行中なら何もしない (再レンダリング対策)
+    if (socketRef.current) return;
+
+    socketRef.current = io(SOCKET_SERVER_URL, {
+        reconnectionAttempts: 5, // 再接続試行回数
+        reconnectionDelay: 1000, // 再接続遅延 (ms)
+    });
+    console.log('Connecting to Socket.IO server...');
+
+    const socket = socketRef.current; // 以降 socket 変数でアクセス
+
+    // 接続成功時の処理
+    socket.on('connect', () => {
+      console.log('Connected to Socket.IO server with id:', socket.id);
+    });
+
+    // 'simulation_state_update' イベントをリッスン
+    socket.on('simulation_state_update', (newState: RawSimulationState) => {
+      // バックエンドからのデータ形式に合わせて変換
+      const formattedState: SimulationState = {
+          ...newState,
+          environment: {
+              walls: newState.environment.walls.map((w) => ({ start: { position: w[0] }, end: { position: w[1] } })),
+              obstacles: newState.environment.obstacles.map((o) => ({ center: { position: [o[0], o[1]] }, radius: o[2] }))
+          }
+      };
+      setSimulationState(formattedState);
+      // console.log('Received state update:', formattedState.time);
+    });
+
+    // エラーハンドリング
+    socket.on('connect_error', (err) => {
+      console.error('Socket.IO connection error:', err.message);
+    });
+
+    socket.on('disconnect', (reason) => {
+        console.log('Disconnected from Socket.IO server:', reason);
+        // 再接続ロジックは socket.io-client が自動で行うが、必要ならここで追加処理
+    });
+
+    // コンポーネントのアンマウント時に切断
     return () => {
-      if (intervalId) clearInterval(intervalId); // クリーンアップ
+      console.log('Disconnecting from Socket.IO server...');
+      socket.disconnect();
+      socketRef.current = null; // ref をクリア
     };
-     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // マウント時に一度だけ実行
 
   return (
     <div className="App">
