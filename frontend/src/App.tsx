@@ -44,6 +44,9 @@ interface SimulationState {
 // Socket.IO サーバーの URL (バックエンドと同じポート)
 const SOCKET_SERVER_URL = 'http://localhost:5001';
 
+// --- API & Socket URLs ---
+const API_BASE_URL = 'http://localhost:5001/api'; // API ベース URL を追加
+
 function App() {
   // 初期状態を定義
   const initialEnvironment: EnvironmentData = { walls: [], obstacles: [] };
@@ -58,6 +61,61 @@ function App() {
   const socketRef = useRef<Socket | null>(null);
   // API から受け取るデータ型の any を回避するための Raw 型 (より厳密に定義も可能)
   type RawSimulationState = Omit<SimulationState, 'environment'> & { environment: { walls: [number,number][][], obstacles: [number,number,number][] } };
+  // ControlPanel に渡す初期人数を state で管理
+  const [initialNumPersons, setInitialNumPersons] = useState<number>(10); // デフォルト値
+
+  // --- API ハンドラ関数 ---
+  const handleStart = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/simulation/start`, { method: 'POST' });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log('Start simulation response:', data);
+      // 状態更新は WebSocket 経由で行われるため、ここでは何もしない
+    } catch (error) {
+      console.error("Failed to start simulation:", error);
+    }
+  };
+
+  const handleStop = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/simulation/stop`, { method: 'POST' });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log('Stop simulation response:', data);
+      // 状態更新は WebSocket 経由
+    } catch (error) {
+      console.error("Failed to stop simulation:", error);
+    }
+  };
+
+  const handleReset = async (numPersons: number) => { // 引数で人数を受け取る
+    console.log(`Resetting simulation with ${numPersons} persons...`);
+    try {
+      const response = await fetch(`${API_BASE_URL}/simulation/reset`, {
+         method: 'POST',
+         headers: {
+             'Content-Type': 'application/json',
+         },
+         // リクエストボディに人数を含める
+         body: JSON.stringify({ num_persons: numPersons })
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      console.log('Reset simulation response:', data);
+      // 状態更新は WebSocket 経由
+      // リセット成功時に ControlPanel の人数も更新するために initialNumPersons を更新
+      setInitialNumPersons(numPersons);
+    } catch (error) {
+      console.error("Failed to reset simulation:", error);
+    }
+  };
 
   useEffect(() => {
     // Socket.IO サーバーに接続
@@ -88,7 +146,8 @@ function App() {
           }
       };
       setSimulationState(formattedState);
-      // console.log('Received state update:', formattedState.time);
+      // WebSocket で状態更新があった場合も ControlPanel の人数を同期する
+      setInitialNumPersons(formattedState.persons.length);
     });
 
     // エラーハンドリング
@@ -100,6 +159,36 @@ function App() {
         console.log('Disconnected from Socket.IO server:', reason);
         // 再接続ロジックは socket.io-client が自動で行うが、必要ならここで追加処理
     });
+
+    // WebSocket 接続時の初期状態取得（APIを叩く）
+    // バックエンドの /api/simulation/state エンドポイントから初期状態を取得
+    const fetchInitialState = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/simulation/state`);
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const initialState: RawSimulationState = await response.json();
+        // 状態をフォーマットしてセット
+        const formattedState: SimulationState = {
+          ...initialState,
+          environment: {
+              walls: initialState.environment.walls.map((w) => ({ start: { position: w[0] }, end: { position: w[1] } })),
+              obstacles: initialState.environment.obstacles.map((o) => ({ center: { position: [o[0], o[1]] }, radius: o[2] }))
+          }
+        };
+        setSimulationState(formattedState);
+        // ControlPanel の初期人数も設定
+        setInitialNumPersons(formattedState.persons.length);
+        console.log('Fetched initial state:', formattedState);
+      } catch (error) {
+        console.error("Failed to fetch initial state:", error);
+        // エラー時もデフォルト値で初期化される
+        setInitialNumPersons(10); // エラー時はデフォルト値に戻す
+      }
+    };
+
+    fetchInitialState(); // 初回マウント時に実行
 
     // コンポーネントのアンマウント時に切断
     return () => {
@@ -120,7 +209,14 @@ function App() {
           persons={simulationState.persons}
           environment={simulationState.environment}
         />
-        <ControlPanel />
+        {/* ControlPanel にハンドラ関数と is_running 状態を渡す */}
+        <ControlPanel
+          onStart={handleStart}
+          onStop={handleStop}
+          onReset={handleReset}
+          isRunning={simulationState.is_running}
+          initialNumPersons={initialNumPersons}
+        />
       </div>
     </div>
   );

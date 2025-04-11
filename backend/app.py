@@ -175,25 +175,38 @@ def reset_simulation():
     global simulator, environment, persons, loader, simulation_thread
     print("Attempting to reset simulation...")
 
+    # リクエストボディから人数を取得 (デフォルトは10)
+    data = request.get_json(silent=True) # エラー時に None を返すように silent=True
+    num_persons_from_request = data.get('num_persons', None) if data else None
+
     # 既存のスレッドを停止 (内部で emit される)
     stop_running_simulation()
 
     with simulator_lock:
-        # リセット前の人数を引き継ぐか、固定値にするかなどを検討
-        # ここでは直前の人数を引き継ぐ
-        num_persons = len(simulator.persons) if simulator else 10
+        # リクエストで人数が指定されていればそれを使う
+        # 指定されていない場合、現在の人数を引き継ぐか、デフォルト値にする
+        if num_persons_from_request is not None and isinstance(num_persons_from_request, int) and num_persons_from_request > 0:
+            num_persons = num_persons_from_request
+            print(f"Resetting with num_persons from request: {num_persons}")
+        else:
+            # 現在の人数を引き継ぐ (またはデフォルト10人)
+            num_persons = len(simulator.persons) if simulator and len(simulator.persons) > 0 else 10
+            print(f"Resetting with previous or default num_persons: {num_persons}")
+            if num_persons_from_request is not None:
+                 print(f"(Invalid num_persons in request: {num_persons_from_request})")
+
         environment = loader.load_environment()
+        # 指定された人数で persons をロード
         persons = loader.load_persons(num_persons=num_persons)
         simulator = Simulator(environment, persons, dt=SIMULATION_DT)
         print("Simulator reset to initial state.")
-        # リセット直後の状態を取得
-        current_state = simulator.get_state() # is_running=False のはず
+        current_state = simulator.get_state()
 
-    # リセット後の状態を emit (stop_running_simulation でも emit されるが念のため)
+    # リセット後の状態を emit
     socketio.emit('simulation_state_update', current_state)
     print("Emitted state after reset.")
 
-    return jsonify({"message": "Simulator reset."})
+    return jsonify({"message": "Simulator reset.", "num_persons": num_persons})
 
 @app.route('/api/simulation/state', methods=['GET'])
 def get_simulation_state():
