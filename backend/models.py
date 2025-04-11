@@ -1,5 +1,20 @@
 import numpy as np
 
+# --- Geometry Helper Functions ---
+def point_segment_distance(p, a, b):
+    """点 p と線分 ab の最短距離を計算"""
+    ap = p - a
+    ab = b - a
+    ab_squared = np.dot(ab, ab)
+    if ab_squared == 0.0:
+        return np.linalg.norm(ap) # a と b が同じ点の場合
+    # 線分 ab 上への p の射影点を計算
+    t = np.dot(ap, ab) / ab_squared
+    t = np.clip(t, 0, 1) # 射影点が線分外なら端点に丸める
+    closest_point = a + t * ab
+    return np.linalg.norm(p - closest_point)
+
+# --- Environment Class ---
 class Environment:
     """
     地形データを管理するクラス。
@@ -14,12 +29,29 @@ class Environment:
         self.slopes = slopes
         # TODO: 地形データの具体的な表現方法を定義 (例: ポリゴン、グリッドなど)
         # TODO: is_accessible で壁や障害物を考慮するようにする
+        self.np_walls = [(np.array(w[0]), np.array(w[1])) for w in walls]
+        self.np_obstacles = [(np.array(o[:2]), o[2]) for o in obstacles] # (center_np_array, radius)
 
-    def is_accessible(self, position):
+    def is_accessible(self, position, person_radius=0.0):
         """指定された位置が通行可能か判定する (壁と障害物を考慮)"""
-        # 仮実装: 今は常に True だが、将来的にはここで判定
-        # 例: 点と線分の距離、点と円の距離を計算して衝突判定
-        # print(f"Checking accessibility for position: {position}")
+        pos_np = np.array(position)
+
+        # 1. 壁との衝突判定
+        for wall_start, wall_end in self.np_walls:
+            distance = point_segment_distance(pos_np, wall_start, wall_end)
+            if distance < person_radius:
+                # print(f"Collision detected with wall: {wall_start} -> {wall_end} at {position}")
+                return False
+
+        # 2. 障害物との衝突判定
+        for obs_center, obs_radius in self.np_obstacles:
+            distance_to_center = np.linalg.norm(pos_np - obs_center)
+            if distance_to_center < obs_radius + person_radius:
+                # print(f"Collision detected with obstacle: center={obs_center}, radius={obs_radius} at {position}")
+                return False
+
+        # TODO: 他の判定 (境界外チェックなど) も追加可能
+
         return True
 
 class Person:
@@ -44,36 +76,51 @@ class Person:
         direction_to_destination = self.destination - self.position
         distance = np.linalg.norm(direction_to_destination)
 
-        if distance < 0.1: # 目的地に到着
-            self.velocity = np.zeros_like(self.velocity)
+        if distance < 0.1 * self.speed: # 目的地付近で減速・停止 (速度に応じた閾値)
+            self.velocity = direction_to_destination / dt # ピタッと止まるように
+            if np.linalg.norm(self.velocity) < 0.1:
+                 self.velocity = np.zeros_like(self.velocity)
+            # print(f"Person {self.id} reached destination.")
             return
 
-        # 正規化して目標速度をかける
         desired_velocity = (direction_to_destination / distance) * self.speed
-
-        # 現在の速度から目標速度へ向かう (単純なステアリング)
         steering = desired_velocity - self.velocity
-        # steering = steering / self.mass # 質量を考慮する場合
-        # 力を制限する場合: steering = np.clip(steering, -max_force, max_force)
 
-        self.velocity += steering * dt # 加速度として適用 (dtは時間ステップ)
-        # 速度を制限する場合: speed_mag = np.linalg.norm(self.velocity)
+        # --- TODO: 他者からの反発力を追加 --- ここから
+        # repulsive_force = np.zeros_like(self.velocity)
+        # for other in other_persons:
+        #     # 他者との距離計算など
+        #     pass
+        # steering += repulsive_force
+        # --- TODO ここまで ----
+
+        # --- 速度・力の制限 (オプション) ---
+        # steering = np.clip(steering, -max_force, max_force) # 力の制限
+        # self.velocity += steering * dt # 質量1として加速度を適用
+        # # 速度制限
+        # speed_mag = np.linalg.norm(self.velocity)
         # if speed_mag > self.speed:
         #     self.velocity = (self.velocity / speed_mag) * self.speed
+
+        # 単純化: 直接 desired_velocity に近づける (急な方向転換を許容)
+        self.velocity = desired_velocity
 
         print(f"Person {self.id} velocity updated to: {self.velocity}") # 仮実装
 
     def move(self, dt, environment):
-        """速度ベクトルに基づいて位置を更新する"""
+        """速度ベクトルに基づいて位置を更新し、衝突判定を行う"""
+        if np.linalg.norm(self.velocity) < 1e-6: # ほぼ停止しているなら何もしない
+             return
+
         potential_position = self.position + self.velocity * dt
 
-        # TODO: 衝突検知と応答 (Environment.is_accessible などを使用)
-        if environment.is_accessible(potential_position):
+        # 移動先の位置が通行可能かチェック (自身のサイズを考慮)
+        if environment.is_accessible(potential_position, self.size):
              self.position = potential_position
         else:
-             # 衝突した場合の処理 (例: 速度をゼロにする、反射するなど)
+             # 衝突した場合、速度をゼロにする (シンプルな応答)
+             # print(f"Person {self.id} stopped due to collision near {potential_position}")
              self.velocity = np.zeros_like(self.velocity)
-             print(f"Person {self.id} movement blocked at {potential_position}")
 
         print(f"Person {self.id} moved to: {self.position}") # 仮実装
 
