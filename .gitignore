@@ -34,4 +34,7 @@ frontend/*.log
 
 # OS specific
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Documentation / Non-code files
+/docs/ 
