@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.hypothesis/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+*.so
+
+# Node.js (念のため)
+frontend/node_modules/
+frontend/build/
+frontend/.pnp.*
+frontend/.yarn/*
+frontend/coverage/
+frontend/*.log
+.npm
+*.tsbuildinfo
+
+# Node.js files in root (if unintentional)
+/node_modules/
+package.json
+package-lock.json
+
+# IDE / Editor specific
+.idea/
+.vscode/
+*.swp
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Documentation / Non-code files
+/docs/ 
