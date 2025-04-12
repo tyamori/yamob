@@ -107,11 +107,6 @@ function App() {
     newSocket.on('simulation_state_update', (data: any) => { // Use any for now
       console.log("Received state via WebSocket:", data); // ★ デバッグログ追加
       setSimulationState(data);
-      // Sync numPersons if it differs (example)
-      if (data && data.persons && data.persons.length !== numPersons) {
-        console.log(`Syncing numPersons state: ${data.persons.length}`);
-        setNumPersons(data.persons.length);
-      }
       // TODO: Sync other control panel settings if needed based on received state
     });
 
@@ -199,8 +194,9 @@ function App() {
 
   return (
     <div className="App min-h-screen bg-gray-900 text-white flex flex-col">
-      <header className="bg-gray-800 shadow-md p-4">
-        <h1 className="text-2xl font-bold text-center text-indigo-400">人流シミュレーター</h1>
+      <header className="text-center py-4 px-4 sm:px-6 lg:px-8 flex-shrink-0 border-b border-gray-700 bg-gray-800 shadow-md">
+        <h1 className="text-3xl font-bold mb-1 text-indigo-400">yamob</h1>
+        <p className="text-sm text-gray-500 mb-3">"Yet Another Mobility". It is library for mobility simulator.</p>
         <div className="text-center text-sm mt-1">
           {isConnected ? <span className="text-green-400">● 接続済み</span> : <span className="text-red-400">● 未接続</span>}
         </div>
