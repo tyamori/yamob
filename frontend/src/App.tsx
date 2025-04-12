@@ -105,7 +105,7 @@ function App() {
 
     // シミュレーション状態更新イベントのリスナー
     newSocket.on('simulation_state_update', (data: any) => { // Use any for now
-      if (process.env.NODE_ENV === 'development') {
+      if (import.meta.env.DEV) {
         console.log("Received state via WebSocket:", data); // ★ デバッグログ追加
       }
       setSimulationState(data);
