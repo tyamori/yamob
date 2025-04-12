@@ -336,6 +336,15 @@ class Simulator:
         else:
             print("Simulation is not running.")
 
+    def is_simulation_complete(self):
+        """全てのエージェントが非アクティブかどうかを判定する"""
+        if not self.persons: # エージェントがいなければ完了とみなす
+            return True
+        for person in self.persons.values():
+            if person.is_active:
+                return False # アクティブなエージェントがいれば未完了
+        return True # アクティブなエージェントがいなければ完了
+
     def get_state(self):
         """現在のシミュレーション状態を返す (API用, フロントエンド型に合わせた形式)"""
         persons_state = []
