@@ -1,64 +1,65 @@
 import React, { useState, useEffect } from 'react';
 
-// props の型を定義
+// Renamed initial props to reflect they are the last *active* settings
 interface ControlPanelProps {
-  initialNumPersons: number;
-  onNumPersonsChange: (numPersons: number) => void; // Renamed from onReset to be more specific
-  initialNumObstacles: number;
-  onNumObstaclesChange: (numObstacles: number) => void;
-  initialObstacleAvgRadius: number;
-  onObstacleRadiusChange: (avgRadius: number) => void;
-  obstacleShape: 'random' | 'circle' | 'rectangle';
-  onObstacleShapeChange: (shape: 'random' | 'circle' | 'rectangle') => void;
+  activeNumPersons: number;
+  activeNumObstacles: number;
+  activeObstacleAvgRadius: number;
+  activeObstacleShape: 'random' | 'circle' | 'rectangle';
+  // Removed individual change handlers
+  // Added a handler to apply all settings at once
+  onApplySettings: (settings: {
+    numPersons: number;
+    numObstacles: number;
+    obstacleAvgRadius: number;
+    obstacleShape: 'random' | 'circle' | 'rectangle';
+  }) => void;
 }
 
 const ControlPanel: React.FC<ControlPanelProps> = ({
-  initialNumPersons,
-  onNumPersonsChange,
-  initialNumObstacles,
-  onNumObstaclesChange,
-  initialObstacleAvgRadius,
-  onObstacleRadiusChange,
-  obstacleShape,
-  onObstacleShapeChange
+  activeNumPersons,
+  activeNumObstacles,
+  activeObstacleAvgRadius,
+  activeObstacleShape,
+  onApplySettings
 }) => {
-  // 人数を管理する state
-  const [numPersons, setNumPersons] = useState<number>(initialNumPersons);
-  const [numObstacles, setNumObstacles] = useState<number>(initialNumObstacles);
-  const [obstacleAvgRadius, setObstacleAvgRadius] = useState<number>(initialObstacleAvgRadius);
-  const [currentObstacleShape, setCurrentObstacleShape] = useState(obstacleShape);
+  // Local state for inputs, initialized by props
+  const [numPersons, setNumPersons] = useState<number>(activeNumPersons);
+  const [numObstacles, setNumObstacles] = useState<number>(activeNumObstacles);
+  const [obstacleAvgRadius, setObstacleAvgRadius] = useState<number>(activeObstacleAvgRadius);
+  const [obstacleShape, setObstacleShape] = useState(activeObstacleShape);
 
-  useEffect(() => { setNumPersons(initialNumPersons); }, [initialNumPersons]);
-  useEffect(() => { setNumObstacles(initialNumObstacles); }, [initialNumObstacles]);
-  useEffect(() => { setObstacleAvgRadius(initialObstacleAvgRadius); }, [initialObstacleAvgRadius]);
-  useEffect(() => { setCurrentObstacleShape(obstacleShape); }, [obstacleShape]);
+  // Sync local state if props change (e.g., after external reset or apply)
+  useEffect(() => { setNumPersons(activeNumPersons); }, [activeNumPersons]);
+  useEffect(() => { setNumObstacles(activeNumObstacles); }, [activeNumObstacles]);
+  useEffect(() => { setObstacleAvgRadius(activeObstacleAvgRadius); }, [activeObstacleAvgRadius]);
+  useEffect(() => { setObstacleShape(activeObstacleShape); }, [activeObstacleShape]);
 
-  // input の変更ハンドラ
+  // Input change handlers now only update local state
   const handleNumPersonsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseInt(event.target.value, 10);
-    const validValue = isNaN(value) || value < 1 ? 1 : value; // Ensure positive integer, default to 1
-    setNumPersons(validValue);
-    onNumPersonsChange(validValue); // Notify parent immediately (or use an apply button)
+    setNumPersons(isNaN(value) || value < 1 ? 1 : value);
   };
-
   const handleNumObstaclesChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseInt(event.target.value, 10);
-    const validValue = isNaN(value) || value < 0 ? 0 : value; // Allow 0 obstacles
-    setNumObstacles(validValue);
-    onNumObstaclesChange(validValue); // Notify parent
+    setNumObstacles(isNaN(value) || value < 0 ? 0 : value);
   };
-
   const handleObstacleRadiusChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = parseFloat(event.target.value);
-    const validValue = isNaN(value) || value <= 0 ? 0.1 : value; // Ensure positive float, default to 0.1
-    setObstacleAvgRadius(validValue);
-    onObstacleRadiusChange(validValue); // Notify parent
+    setObstacleAvgRadius(isNaN(value) || value <= 0 ? 0.1 : value);
+  };
+  const handleShapeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    setObstacleShape(event.target.value as 'random' | 'circle' | 'rectangle');
   };
 
-  const handleShapeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const newShape = event.target.value as 'random' | 'circle' | 'rectangle';
-    setCurrentObstacleShape(newShape);
-    onObstacleShapeChange(newShape); // Notify parent
+  // Handler for the Apply Settings button
+  const handleApplyClick = () => {
+    onApplySettings({
+      numPersons,
+      numObstacles,
+      obstacleAvgRadius,
+      obstacleShape
+    });
   };
 
   return (
@@ -114,7 +115,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
         </label>
         <select
           id="obstacleShape"
-          value={currentObstacleShape}
+          value={obstacleShape}
           onChange={handleShapeChange}
           className="block w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-gray-700 text-gray-100"
         >
@@ -123,6 +124,13 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           <option value="rectangle">矩形</option>
         </select>
       </div>
+
+      <button
+        onClick={handleApplyClick}
+        className="w-full px-4 py-2 rounded font-semibold bg-indigo-600 hover:bg-indigo-700 text-white"
+      >
+        設定を適用
+      </button>
     </div>
   );
 };

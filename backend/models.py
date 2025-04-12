@@ -1,5 +1,6 @@
 import numpy as np
 import rvo2 # RVO2 ライブラリをインポート
+import random # Import random for obstacle generation
 
 # --- Geometry Helper Functions ---
 def point_segment_distance(p, a, b):
@@ -24,14 +25,20 @@ class Environment:
     def __init__(self, walls=[], obstacles=[], slopes=[]):
         # データ形式:
         # walls: [[[x1_start, y1_start], [x1_end, y1_end]], ...]
-        # obstacles: [[center_x, center_y, radius], ...]
+        # obstacles: [{'type': 'circle', 'center': [x, y], 'radius': r}, {'type': 'rectangle', 'center': [x,y], 'width': w, 'height': h}, ...]
         self.walls = walls
-        self.obstacles = obstacles
+        self.obstacles = obstacles # Now a list of dictionaries
         self.slopes = slopes
-        # TODO: 地形データの具体的な表現方法を定義 (例: ポリゴン、グリッドなど)
-        # TODO: is_accessible で壁や障害物を考慮するようにする
         self.np_walls = [(np.array(w[0]), np.array(w[1])) for w in walls]
-        self.np_obstacles = [(np.array(o[:2]), o[2]) for o in obstacles] # (center_np_array, radius)
+        # np_obstacles generation needs update based on new structure
+        self.np_obstacles_circles = []
+        self.np_obstacles_rectangles = []
+        for obs in obstacles:
+            if obs['type'] == 'circle':
+                self.np_obstacles_circles.append((np.array(obs['center']), obs['radius']))
+            elif obs['type'] == 'rectangle':
+                # Store center, width, height for now. Vertices calculated later if needed.
+                self.np_obstacles_rectangles.append((np.array(obs['center']), obs['width'], obs['height']))
 
     def is_accessible(self, position, person_radius=0.0):
         """指定された位置が通行可能か判定する (壁と障害物を考慮)"""
@@ -44,12 +51,23 @@ class Environment:
                 # print(f"Collision detected with wall: {wall_start} -> {wall_end} at {position}")
                 return False
 
-        # 2. 障害物との衝突判定
-        for obs_center, obs_radius in self.np_obstacles:
+        # 2. 円形障害物との衝突判定
+        for obs_center, obs_radius in self.np_obstacles_circles:
             distance_to_center = np.linalg.norm(pos_np - obs_center)
             if distance_to_center < obs_radius + person_radius:
                 # print(f"Collision detected with obstacle: center={obs_center}, radius={obs_radius} at {position}")
                 return False
+
+        # 3. 矩形障害物との衝突判定 (AABB check for simplicity)
+        for obs_center, width, height in self.np_obstacles_rectangles:
+            half_width = width / 2.0
+            half_height = height / 2.0
+            min_x = obs_center[0] - half_width - person_radius
+            max_x = obs_center[0] + half_width + person_radius
+            min_y = obs_center[1] - half_height - person_radius
+            max_y = obs_center[1] + half_height + person_radius
+            if min_x <= pos_np[0] <= max_x and min_y <= pos_np[1] <= max_y:
+                return False # Collision with rectangle bounding box
 
         # TODO: 他の判定 (境界外チェックなど) も追加可能
 
@@ -128,53 +146,56 @@ class Simulator:
 
 
     def _add_environment_to_rvo(self):
-        """Environmentオブジェクトから壁と障害物をRVOシミュレータに追加する"""
+        """Environmentオブジェクトから壁と障害物をRVOシミュレータに追加する (矩形対応)"""
         obstacle_vertices_list = []
 
-        # 1. 壁をポリゴンとして追加 (細い長方形で表現)
-        wall_thickness = 0.1 # 壁の厚み (RVOは体積を持つ障害物を想定)
+        # 1. 壁をポリゴンとして追加 (変更なし)
+        wall_thickness = 0.1
         for start, end in self.environment.np_walls:
             direction = end - start
             length = np.linalg.norm(direction)
             if length < 1e-6: continue
             unit_direction = direction / length
-            # 壁に垂直なベクトル
             normal = np.array([-unit_direction[1], unit_direction[0]]) * (wall_thickness / 2.0)
-
-            # 壁の4頂点を計算 (反時計回り)
             v1 = start + normal
             v2 = end + normal
             v3 = end - normal
             v4 = start - normal
-            # RVOライブラリはタプルのリストを受け入れる
             obstacle_vertices_list.append([tuple(v) for v in [v1, v2, v3, v4]])
 
-        # 2. 円形障害物をポリゴンとして追加 (正多角形で近似)
-        num_circle_vertices = 16 # 円を近似する頂点数
-        for center, radius in self.environment.np_obstacles:
+        # 2. 円形障害物をポリゴンとして追加 (変更なし)
+        num_circle_vertices = 16
+        # Use the stored circle data
+        for center, radius in self.environment.np_obstacles_circles:
             vertices = []
             for i in range(num_circle_vertices):
                 angle = 2.0 * np.pi * i / num_circle_vertices
-                # RVOは障害物の「内側」を定義するため、半径をそのまま使うか、少し大きめに取るか検討
-                # ここでは半径をそのまま使用し、エージェント半径との組み合わせで回避することを期待
-                # 必要であれば radius + wall_thickness / 2.0 のように少し広げる
                 x = center[0] + radius * np.cos(angle)
                 y = center[1] + radius * np.sin(angle)
                 vertices.append((x, y))
-            # 頂点リストを反時計回りに並べる (sin/cosの定義から自然に反時計回りになる)
             obstacle_vertices_list.append(vertices)
 
-        # RVOに障害物を追加
-        print(f"Adding {len(obstacle_vertices_list)} obstacles to RVO Simulator.")
+        # 3. 矩形障害物をポリゴンとして追加
+        # Use the stored rectangle data
+        for center, width, height in self.environment.np_obstacles_rectangles:
+            half_width = width / 2.0
+            half_height = height / 2.0
+            # Calculate 4 vertices (counter-clockwise)
+            v1 = (center[0] - half_width, center[1] - half_height) # Bottom-left
+            v2 = (center[0] + half_width, center[1] - half_height) # Bottom-right
+            v3 = (center[0] + half_width, center[1] + half_height) # Top-right
+            v4 = (center[0] - half_width, center[1] + half_height) # Top-left
+            obstacle_vertices_list.append([v1, v2, v3, v4])
+
+        # RVOに障害物を追加 (変更なし)
+        print(f"Adding {len(obstacle_vertices_list)} obstacles (walls+circles+rects) to RVO Simulator.")
         for vertices in obstacle_vertices_list:
              try:
-                 # addObstacleは頂点のリスト(タプルのリスト)を受け取る
                  self.rvo_simulator.addObstacle(vertices)
              except Exception as e:
                  print(f"Error adding obstacle to RVO: {vertices}, Error: {e}")
 
-
-        # 障害物情報を処理して、内部データ構造(k-D木など)を構築
+        # 障害物情報を処理 (変更なし)
         try:
             self.rvo_simulator.processObstacles()
             print("RVO obstacles processed.")
@@ -283,15 +304,14 @@ class Simulator:
             print("Simulation is not running.")
 
     def get_state(self):
-        """現在のシミュレーション状態を返す (API用)"""
-        # persons リスト内包表記の前に self.persons が空でないかチェックするとより安全
+        """現在のシミュレーション状態を返す (API用, フロントエンド型に合わせた形式)"""
         persons_state = []
         if self.persons:
             persons_state = [
                 {
                     "id": p.id,
-                    "position": p.position.tolist(),
-                    "velocity": p.velocity.tolist(), # RVOによって更新された速度
+                    "position": p.position.tolist(), # [x, y]
+                    "velocity": p.velocity.tolist(),
                     "destination": p.destination.tolist(),
                     "size": p.size,
                     "speed": p.speed
@@ -299,48 +319,182 @@ class Simulator:
                 for p in self.persons.values()
             ]
 
+        # Format obstacles to match frontend ObstacleData union type structure
+        formatted_obstacles = []
+        for obs in self.environment.obstacles:
+            formatted_obs = {
+                'type': obs['type'],
+                # Format center to match frontend Vector2D: { position: [x, y] }
+                'center': {'position': obs['center']}
+            }
+            if obs['type'] == 'circle':
+                formatted_obs['radius'] = obs['radius']
+            elif obs['type'] == 'rectangle':
+                formatted_obs['width'] = obs['width']
+                formatted_obs['height'] = obs['height']
+            formatted_obstacles.append(formatted_obs)
+
         return {
             "time": self.time,
             "persons": persons_state,
             "is_running": self.is_running,
             "environment": {
-                "walls": self.environment.walls,
-                "obstacles": self.environment.obstacles
+                # Format walls similarly to match frontend WallData: { start: { position: [...] }, end: { position: [...] } }
+                "walls": [
+                    {'start': {'position': w[0]}, 'end': {'position': w[1]}}
+                    for w in self.environment.walls
+                ],
+                "obstacles": formatted_obstacles # Use the formatted list
             }
         }
 
 class DataLoader:
     """
-    ファイルから地形データと人物の初期設定を読み込むクラス。
-    今はダミーデータを返す。
+    シミュレーション環境や人物データをロードするクラス。
+    （現状はダミーデータやランダム生成）
     """
-    def load_environment(self, filepath=None):
-        """地形データをファイルから読み込む (今はダミー)"""
-        print(f"Loading environment data (dummy)... path: {filepath}")
-        # TODO: ファイル読み込みロジック実装 (JSON, CSVなど)
-
-        # ダミーデータ: 10x10 の四角い部屋と中央に円形の障害物
+    # Modified to generate random shapes (circle or rectangle)
+    def load_environment(self, filepath=None, num_obstacles=5, avg_radius=0.5, env_width=10.0, env_height=10.0, obstacle_shape='random'): # Added obstacle_shape
+        """
+        環境データをロードまたは生成する。
+        現在は固定の壁とランダムな障害物を生成。
+        """
+        print(f"Generating environment: {env_width}x{env_height}, {num_obstacles} obstacles (Shape: {obstacle_shape}), avg_radius={avg_radius}")
+        # 固定の壁 (境界)
         walls = [
-            [[0, 0], [10, 0]], # 下壁
-            [[10, 0], [10, 10]], # 右壁
-            [[10, 10], [0, 10]], # 上壁
-            [[0, 10], [0, 0]]  # 左壁
+            [(0.1, 0.1), (env_width - 0.1, 0.1)],
+            [(env_width - 0.1, 0.1), (env_width - 0.1, env_height - 0.1)],
+            [(env_width - 0.1, env_height - 0.1), (0.1, env_height - 0.1)],
+            [(0.1, env_height - 0.1), (0.1, 0.1)]
         ]
-        obstacles = [
-            [5, 5, 1.5] # 中心(5,5), 半径1.5の円
-        ]
+
+        # ランダムな障害物
+        obstacles = [] # Now a list of dicts
+        min_radius = max(0.1, avg_radius * 0.5)
+        max_radius = avg_radius * 1.5
+        min_dim = min_radius # Min width/height for rectangles
+        max_dim = max_radius * 2 # Max width/height for rectangles
+
+        max_attempts = num_obstacles * 20 # Increased attempts slightly
+        attempts = 0
+
+        while len(obstacles) < num_obstacles and attempts < max_attempts:
+            attempts += 1
+            # Determine shape
+            current_shape = obstacle_shape
+            if current_shape == 'random':
+                current_shape = random.choice(['circle', 'rectangle'])
+
+            # Generate parameters based on shape
+            if current_shape == 'circle':
+                radius = random.uniform(min_radius, max_radius)
+                buffer = radius + 0.2
+                center_x = random.uniform(buffer, env_width - buffer)
+                center_y = random.uniform(buffer, env_height - buffer)
+                new_obstacle = {'type': 'circle', 'center': [center_x, center_y], 'radius': radius}
+            elif current_shape == 'rectangle':
+                width = random.uniform(min_dim, max_dim)
+                height = random.uniform(min_dim, max_dim)
+                buffer_x = width / 2.0 + 0.2
+                buffer_y = height / 2.0 + 0.2
+                center_x = random.uniform(buffer_x, env_width - buffer_x)
+                center_y = random.uniform(buffer_y, env_height - buffer_y)
+                new_obstacle = {'type': 'rectangle', 'center': [center_x, center_y], 'width': width, 'height': height}
+            else: # Default to circle if shape unknown
+                radius = random.uniform(min_radius, max_radius)
+                buffer = radius + 0.2
+                center_x = random.uniform(buffer, env_width - buffer)
+                center_y = random.uniform(buffer, env_height - buffer)
+                new_obstacle = {'type': 'circle', 'center': [center_x, center_y], 'radius': radius}
+
+            # Overlap check (simplified AABB check for both)
+            is_overlapping = False
+            for existing_obs in obstacles:
+                # Basic Bounding Box check (could be more precise)
+                if existing_obs['type'] == 'circle':
+                    obs_min_x, obs_max_x = existing_obs['center'][0] - existing_obs['radius'], existing_obs['center'][0] + existing_obs['radius']
+                    obs_min_y, obs_max_y = existing_obs['center'][1] - existing_obs['radius'], existing_obs['center'][1] + existing_obs['radius']
+                else: # rectangle
+                    obs_min_x = existing_obs['center'][0] - existing_obs['width']/2
+                    obs_max_x = existing_obs['center'][0] + existing_obs['width']/2
+                    obs_min_y = existing_obs['center'][1] - existing_obs['height']/2
+                    obs_max_y = existing_obs['center'][1] + existing_obs['height']/2
+
+                if new_obstacle['type'] == 'circle':
+                    new_min_x, new_max_x = new_obstacle['center'][0] - new_obstacle['radius'], new_obstacle['center'][0] + new_obstacle['radius']
+                    new_min_y, new_max_y = new_obstacle['center'][1] - new_obstacle['radius'], new_obstacle['center'][1] + new_obstacle['radius']
+                else: # rectangle
+                    new_min_x = new_obstacle['center'][0] - new_obstacle['width']/2
+                    new_max_x = new_obstacle['center'][0] + new_obstacle['width']/2
+                    new_min_y = new_obstacle['center'][1] - new_obstacle['height']/2
+                    new_max_y = new_obstacle['center'][1] + new_obstacle['height']/2
+
+                # Check for AABB overlap
+                if not (new_max_x < obs_min_x or new_min_x > obs_max_x or new_max_y < obs_min_y or new_min_y > obs_max_y):
+                    is_overlapping = True
+                    break # Overlap detected
+
+            if not is_overlapping:
+                obstacles.append(new_obstacle)
+
+        if len(obstacles) < num_obstacles:
+            print(f"Warning: Could only place {len(obstacles)} out of {num_obstacles} requested obstacles.")
+
         return Environment(walls=walls, obstacles=obstacles)
 
-    def load_persons(self, filepath=None, num_persons=5):
-        """人物データをファイルから読み込む (今はダミー)"""
-        print(f"Loading persons data (dummy)... path: {filepath}, num: {num_persons}")
-        # TODO: ファイル読み込みロジック実装
+    # Modified to generate random destinations within bounds
+    def load_persons(self, filepath=None, num_persons=5, env_width=10.0, env_height=10.0):
+        """
+        人物データをロードまたは生成する。
+        現在はランダムな位置と目的地を持つ人物を生成。
+        Args:
+            filepath: 人物データのファイルパス (現在は未使用)
+            num_persons: 生成する人物の数
+            env_width: 環境の幅 (目的地生成に使用)
+            env_height: 環境の高さ (目的地生成に使用)
+        Returns:
+            list[Person]: 生成された Person オブジェクトのリスト
+        """
+        print(f"Generating {num_persons} persons...")
         persons = []
-        for i in range(num_persons):
-            # ダミーデータ (2次元空間を想定)
-            initial_pos = np.random.rand(2) * 10 # 0-10の範囲でランダム配置
-            destination = np.random.rand(2) * 10
-            speed = 1.0 + np.random.rand() * 0.5 # 1.0-1.5の範囲
-            size = 0.2 # 半径
-            persons.append(Person(id=i, initial_position=initial_pos, speed=speed, size=size, destination=destination))
+        # Simple placement attempt limit
+        max_attempts = num_persons * 10
+        attempts = 0
+        person_radius = 0.2 # Match default RVO agent radius
+
+        while len(persons) < num_persons and attempts < max_attempts:
+            attempts += 1
+            # Initial position (ensure not inside walls initially)
+            buffer = person_radius + 0.2
+            pos_x = random.uniform(buffer, env_width - buffer)
+            pos_y = random.uniform(buffer, env_height - buffer)
+            initial_pos = [pos_x, pos_y]
+
+            # Random destination within bounds
+            dest_x = random.uniform(buffer, env_width - buffer)
+            dest_y = random.uniform(buffer, env_height - buffer)
+            destination = [dest_x, dest_y]
+
+            # Basic overlap check for initial positions
+            is_overlapping = False
+            for p in persons:
+                dist_sq = (initial_pos[0] - p.position[0])**2 + (initial_pos[1] - p.position[1])**2
+                if dist_sq < (person_radius * 2 + 0.1)**2:
+                    is_overlapping = True
+                    break
+            # TODO: Also check overlap with obstacles if needed at start
+
+            if not is_overlapping:
+                persons.append(Person(
+                    id=len(persons), # Simple incremental ID
+                    initial_position=initial_pos,
+                    speed=random.uniform(0.8, 1.2), # Random speed
+                    size=person_radius,
+                    destination=destination
+                ))
+            # else: print("Person placement attempt failed due to overlap.")
+
+        if len(persons) < num_persons:
+            print(f"Warning: Could only place {len(persons)} out of {num_persons} requested persons.")
+
         return persons 

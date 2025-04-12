@@ -175,28 +175,36 @@ def reset_simulation():
     global simulator, environment, persons, loader, simulation_thread
     print("Attempting to reset simulation...")
 
-    # リクエストボディから人数を取得 (デフォルトは10)
-    data = request.get_json(silent=True) # エラー時に None を返すように silent=True
-    num_persons_from_request = data.get('num_persons', None) if data else None
+    # リクエストボディからパラメータを取得
+    data = request.get_json(silent=True) or {}
+    num_persons_from_request = data.get('num_persons')
+    num_obstacles_from_request = data.get('num_obstacles', 5)
+    obstacle_avg_radius_from_request = data.get('obstacle_avg_radius', 0.5)
+    # --- Get obstacle_shape from request --- V
+    obstacle_shape_from_request = data.get('obstacle_shape', 'random') # Default to 'random'
+    # --- Get obstacle_shape from request --- ^
 
-    # 既存のスレッドを停止 (内部で emit される)
+    # 既存のスレッドを停止
     stop_running_simulation()
 
     with simulator_lock:
-        # リクエストで人数が指定されていればそれを使う
-        # 指定されていない場合、現在の人数を引き継ぐか、デフォルト値にする
+        # 人数の決定ロジック (変更なし)
         if num_persons_from_request is not None and isinstance(num_persons_from_request, int) and num_persons_from_request > 0:
             num_persons = num_persons_from_request
             print(f"Resetting with num_persons from request: {num_persons}")
         else:
-            # 現在の人数を引き継ぐ (またはデフォルト10人)
             num_persons = len(simulator.persons) if simulator and len(simulator.persons) > 0 else 10
             print(f"Resetting with previous or default num_persons: {num_persons}")
             if num_persons_from_request is not None:
                  print(f"(Invalid num_persons in request: {num_persons_from_request})")
 
-        environment = loader.load_environment()
-        # 指定された人数で persons をロード
+        # Pass all parameters including shape to load_environment
+        print(f"Loading environment with {num_obstacles_from_request} obstacles (Shape: {obstacle_shape_from_request}), avg radius {obstacle_avg_radius_from_request}")
+        environment = loader.load_environment(
+            num_obstacles=num_obstacles_from_request,
+            avg_radius=obstacle_avg_radius_from_request,
+            obstacle_shape=obstacle_shape_from_request # Pass the shape
+        )
         persons = loader.load_persons(num_persons=num_persons)
         simulator = Simulator(environment, persons, dt=SIMULATION_DT)
         print("Simulator reset to initial state.")
@@ -206,7 +214,14 @@ def reset_simulation():
     socketio.emit('simulation_state_update', current_state)
     print("Emitted state after reset.")
 
-    return jsonify({"message": "Simulator reset.", "num_persons": num_persons})
+    # Return values including obstacle params for confirmation
+    return jsonify({
+        "message": "Simulator reset.",
+        "num_persons": num_persons,
+        "num_obstacles": num_obstacles_from_request,
+        "obstacle_avg_radius": obstacle_avg_radius_from_request,
+        "obstacle_shape": obstacle_shape_from_request # Include shape in response
+    })
 
 @app.route('/api/simulation/state', methods=['GET'])
 def get_simulation_state():

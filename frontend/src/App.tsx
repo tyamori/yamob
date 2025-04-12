@@ -80,12 +80,12 @@ function App() {
   // API から受け取るデータ型の any を回避するための Raw 型 (より厳密に定義も可能)
   type RawSimulationState = Omit<SimulationState, 'environment'> & { environment: { walls: [number,number][][], obstacles: any[] } }; // Use any[] for raw obstacles initially
   // ControlPanel に渡す初期人数を state で管理
-  const [initialNumPersons, setInitialNumPersons] = useState<number>(10);
+  const [activeNumPersons, setActiveNumPersons] = useState<number>(10);
   // --- Add state for obstacle parameters --- V
-  const [numObstacles, setNumObstacles] = useState<number>(5); // Default 5 obstacles
-  const [obstacleAvgRadius, setObstacleAvgRadius] = useState<number>(0.5); // Default 0.5 radius
+  const [activeNumObstacles, setActiveNumObstacles] = useState<number>(5); // Default 5 obstacles
+  const [activeObstacleAvgRadius, setActiveObstacleAvgRadius] = useState<number>(0.5); // Default 0.5 radius
   // --- Add state for obstacle shape --- V
-  const [obstacleShape, setObstacleShape] = useState<'random' | 'circle' | 'rectangle'>('random'); // Default to random
+  const [activeObstacleShape, setActiveObstacleShape] = useState<'random' | 'circle' | 'rectangle'>('random'); // Default to random
   // --- Add state for obstacle parameters --- ^
 
   // --- API ハンドラ関数 ---
@@ -119,33 +119,28 @@ function App() {
     }
   };
 
-  const handleReset = async (numPersons: number, numObs?: number, avgRad?: number, shape?: string) => {
-    const currentNumObstacles = numObs ?? numObstacles;
-    const currentAvgRadius = avgRad ?? obstacleAvgRadius;
-    const currentShape = shape ?? obstacleShape;
-    console.log(`Resetting simulation with ${numPersons} persons, ${currentNumObstacles} ${currentShape} obstacles, avg radius ${currentAvgRadius}...`);
+  const handleReset = async (numPersons: number, numObs: number, avgRad: number, shape: string) => {
+    console.log(`Resetting simulation with ${numPersons} persons, ${numObs} ${shape} obstacles, avg radius ${avgRad}...`);
     try {
       const response = await fetch(`/api/simulation/reset`, {
          method: 'POST',
-         headers: {
-             'Content-Type': 'application/json',
-         },
+         headers: { 'Content-Type': 'application/json' },
          body: JSON.stringify({
             num_persons: numPersons,
-            num_obstacles: currentNumObstacles,
-            obstacle_avg_radius: currentAvgRadius,
-            obstacle_shape: currentShape // Add shape parameter
+            num_obstacles: numObs,
+            obstacle_avg_radius: avgRad,
+            obstacle_shape: shape
          })
       });
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) { throw new Error(`HTTP error! status: ${response.status}`); }
       const data = await response.json();
       console.log('Reset simulation response:', data);
-      setInitialNumPersons(data.num_persons);
-      setNumObstacles(data.num_obstacles);
-      setObstacleAvgRadius(data.obstacle_avg_radius);
-      // We don't get shape back from backend reset response currently
+      // Update active settings state based on response (this confirms the applied settings)
+      setActiveNumPersons(data.num_persons);
+      setActiveNumObstacles(data.num_obstacles);
+      setActiveObstacleAvgRadius(data.obstacle_avg_radius);
+      // Backend currently doesn't echo back the shape, keep frontend state
+      // setActiveObstacleShape(data.obstacle_shape); // Uncomment if backend sends it back
     } catch (error) {
       console.error("Failed to reset simulation:", error);
     }
@@ -157,16 +152,19 @@ function App() {
       try {
         const response = await fetch(`/api/simulation/state`);
         if (!response.ok) { throw new Error(`HTTP error! status: ${response.status}`); }
-        // Backend now sends data in the correct frontend format
-        const initialState = await response.json() as SimulationState; // Type assert directly
-
-        // No more manual mapping needed if backend format matches
+        const initialState = await response.json() as SimulationState;
         setSimulationState(initialState);
-        setInitialNumPersons(initialState.persons.length);
+        // Also set the initial active settings based on fetched state
+        setActiveNumPersons(initialState.persons.length);
+        // TODO: Infer initial obstacle settings from initialState.environment.obstacles if possible?
+        // For now, keep the default active settings on initial load.
+        // setActiveNumObstacles(initialState.environment.obstacles.length);
+        // setActiveObstacleAvgRadius(...); // Hard to infer average radius
+        // setActiveObstacleShape(...); // Hard to infer shape mix
         console.log('Fetched initial state:', initialState);
       } catch (error) { 
         console.error("Failed to fetch initial state:", error);
-        setInitialNumPersons(10);
+        setActiveNumPersons(10);
       }
     };
     fetchInitialState();
@@ -181,7 +179,7 @@ function App() {
     socket.on('simulation_state_update', (newState: SimulationState) => { // Type assert directly
        // No more manual mapping needed if backend format matches
       setSimulationState(newState);
-      setInitialNumPersons(newState.persons.length);
+      setActiveNumPersons(newState.persons.length);
     });
     socket.on('connect_error', (err) => { console.error('Socket.IO connection error:', err.message); });
     socket.on('disconnect', (reason) => { console.log('Disconnected from Socket.IO server:', reason); });
@@ -193,26 +191,23 @@ function App() {
     };
   }, []);
 
-  // Handler for number of persons change from ControlPanel
-  const handleNumPersonsChange = (newNumPersons: number) => {
-    handleReset(newNumPersons, numObstacles, obstacleAvgRadius, obstacleShape);
+  // Handler for applying settings from ControlPanel
+  const handleApplySettings = (settings: {
+    numPersons: number;
+    numObstacles: number;
+    obstacleAvgRadius: number;
+    obstacleShape: 'random' | 'circle' | 'rectangle';
+  }) => {
+    console.log("Applying settings:", settings);
+    // Call handleReset with the new settings
+    handleReset(
+        settings.numPersons,
+        settings.numObstacles,
+        settings.obstacleAvgRadius,
+        settings.obstacleShape
+    );
+    // Note: handleReset now updates the active... state variables upon successful response
   };
-
-  // --- Handlers for obstacle parameter changes from ControlPanel --- V
-  const handleNumObstaclesChange = (newNumObstacles: number) => {
-    setNumObstacles(newNumObstacles);
-    // handleReset(initialNumPersons, newNumObstacles, obstacleAvgRadius, obstacleShape);
-  };
-
-  const handleObstacleRadiusChange = (newAvgRadius: number) => {
-    setObstacleAvgRadius(newAvgRadius);
-    // handleReset(initialNumPersons, numObstacles, newAvgRadius, obstacleShape);
-  };
-  const handleObstacleShapeChange = (newShape: 'random' | 'circle' | 'rectangle') => {
-    setObstacleShape(newShape);
-    // handleReset(initialNumPersons, numObstacles, obstacleAvgRadius, newShape);
-  };
-  // --- Handlers for obstacle parameter changes from ControlPanel --- ^
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100">
@@ -232,10 +227,10 @@ function App() {
           >
             {simulationState.is_running ? 'Stop' : 'Start'}
           </button>
-          {/* Reset Button with Icon */}
+          {/* Update reset button onClick to use *active* settings */}
           <button
-            onClick={() => handleReset(initialNumPersons, numObstacles, obstacleAvgRadius, obstacleShape)}
-            title="Reset Simulation"
+            onClick={() => handleReset(activeNumPersons, activeNumObstacles, activeObstacleAvgRadius, activeObstacleShape)}
+            title="Reset Simulation with Current Settings"
             className="p-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white"
           >
             <ArrowPathIcon className="h-5 w-5" />
@@ -256,16 +251,13 @@ function App() {
           {/* Changed title to Conditions and adjusted sticky header */}
           <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600 sticky top-0 z-10">Conditions</h2>
           <div className="p-4">
-            {/* Pass obstacle shape state and handler to ControlPanel */}
+            {/* Pass active settings state and the apply handler to ControlPanel */}
             <ControlPanel
-              initialNumPersons={initialNumPersons}
-              onNumPersonsChange={handleNumPersonsChange}
-              initialNumObstacles={numObstacles}
-              onNumObstaclesChange={handleNumObstaclesChange}
-              initialObstacleAvgRadius={obstacleAvgRadius}
-              onObstacleRadiusChange={handleObstacleRadiusChange}
-              obstacleShape={obstacleShape}
-              onObstacleShapeChange={handleObstacleShapeChange}
+              activeNumPersons={activeNumPersons}
+              activeNumObstacles={activeNumObstacles}
+              activeObstacleAvgRadius={activeObstacleAvgRadius}
+              activeObstacleShape={activeObstacleShape}
+              onApplySettings={handleApplySettings}
             />
           </div>
         </div>
