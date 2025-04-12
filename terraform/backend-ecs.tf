@@ -229,11 +229,11 @@ resource "aws_lb_target_group" "yamob_backend_tg" {
   }
 
   # スティッキーセッション (必要に応じて有効化)
-  # stickiness {
-  #   type            = "lb_cookie"
-  #   cookie_duration = 86400 # 秒 (1日)
-  #   enabled         = true
-  # }
+  stickiness {
+    type            = "lb_cookie"
+    cookie_duration = 86400 # 秒 (1日)
+    enabled         = true
+  }
 
   tags = {
     Project   = "Yamob"
