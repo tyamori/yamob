@@ -88,6 +88,7 @@ class Person:
         self.size = size # 半径
         self.destination = np.array(destination, dtype=float)
         self.velocity = np.zeros(len(initial_position), dtype=float) # 現在の速度ベクトル (RVOが更新)
+        self.is_active = True # アクティブ状態フラグを追加
         # self.path = [] # 必要であれば
 
 class Simulator:
@@ -255,12 +256,18 @@ class Simulator:
             return
 
         # 3. RVOが計算した新しい速度と位置を取得してPersonオブジェクトを更新
-        all_reached = True if self.persons else True # 人がいなければ到達済みとする
+        all_reached_or_inactive = True # 全員が到達または非アクティブかどうかのフラグ
+        arrival_threshold = 0.3 # 到着判定の閾値 (size より少し大きめ)
         for rvo_agent_id, person_id in self.rvo_agent_id_to_person_id.items():
             if person_id not in self.persons:
                 continue
 
             person = self.persons[person_id]
+
+            # Skip inactive persons
+            if not person.is_active:
+                continue
+
             try:
                 # RVOライブラリが内部で位置も更新しているため、それを取得する
                 new_position_tuple = self.rvo_simulator.getAgentPosition(rvo_agent_id)
@@ -269,34 +276,57 @@ class Simulator:
                 person.position = np.array(new_position_tuple)
                 person.velocity = np.array(new_velocity_tuple)
 
-                # 目的地到達判定 (より厳密に)
+                # 目的地到達判定
                 distance_to_dest = np.linalg.norm(person.destination - person.position)
-                if distance_to_dest > arrival_threshold: # まだ到着していない人がいるか
-                     all_reached = False
+                if distance_to_dest <= arrival_threshold:
+                    print(f"Person {person.id} reached destination. Setting inactive.")
+                    person.is_active = False # 到達したら非アクティブに
+                    # ★ RVOシミュレータ内でもエージェントを無効化 (パラメータ変更 + 位置移動)
+                    try:
+                        # 速度と半径をゼロに設定
+                        self.rvo_simulator.setAgentPrefVelocity(rvo_agent_id, (0.0, 0.0))
+                        self.rvo_simulator.setAgentMaxSpeed(rvo_agent_id, 0.0)
+                        self.rvo_simulator.setAgentRadius(rvo_agent_id, 0.0)
+                        # ★ エージェントを遠方に移動させる
+                        far_away_pos = (10000.0, 10000.0)
+                        self.rvo_simulator.setAgentPosition(rvo_agent_id, far_away_pos)
+                        # person.position も更新した方が整合性が取れる (任意)
+                        # person.position = np.array(far_away_pos)
+                    except Exception as e_rvo_disable:
+                        print(f"Error disabling RVO agent {rvo_agent_id}: {e_rvo_disable}")
+                else:
+                    all_reached_or_inactive = False # まだアクティブで到着していない人がいる
 
             except Exception as e:
                  print(f"Error getting state for agent {rvo_agent_id} (Person {person_id}): {e}")
+                 all_reached_or_inactive = False # エラー発生時もまだ完了していないとみなす
 
         # RVOシミュレータの内部時間を取得して同期
         self.time = self.rvo_simulator.getGlobalTime()
         # print(f"--- Simulation time: {self.time:.2f} ---")
 
-        # オプション: 全員が目的地に到達したら停止
-        if all_reached and len(self.persons) > 0:
-            print("All persons seem to have reached their destinations.")
+        # ステップ処理後にアクティブな Person がいるか確認
+        is_any_person_active = False
+        for person in self.persons.values():
+            if person.is_active:
+                is_any_person_active = True
+                break
+
+        # オプション: アクティブな人が誰もいなくなったら停止
+        if not is_any_person_active and len(self.persons) > 0:
+            print("All persons are now inactive. Stopping simulation.")
             self.stop() # 自動停止させる場合
 
     def start(self):
         """シミュレーションを開始"""
         if not self.is_running:
-             # RVOシミュレータの状態もリセットする必要があるか確認
-             # 必要であれば、ここでエージェントや障害物を再設定する
-             # print("Resetting RVO simulator state if necessary...")
-             self.is_running = True
-             print("Simulation started.")
+            # RVOシミュレータの状態もリセットする必要があるか確認
+            # 必要であれば、ここでエージェントや障害物を再設定する
+            # print("Resetting RVO simulator state if necessary...")
+            self.is_running = True
+            print("Simulation started.")
         else:
-             print("Simulation is already running.")
-
+            print("Simulation is already running.")
 
     def stop(self):
         """シミュレーションを停止"""
@@ -310,6 +340,7 @@ class Simulator:
         """現在のシミュレーション状態を返す (API用, フロントエンド型に合わせた形式)"""
         persons_state = []
         if self.persons:
+            # is_active が True の Person のみリストに含める
             persons_state = [
                 {
                     "id": p.id,
@@ -319,7 +350,7 @@ class Simulator:
                     "size": p.size,
                     "speed": p.speed
                 }
-                for p in self.persons.values()
+                for p in self.persons.values() if p.is_active
             ]
 
         # Format obstacles to match frontend ObstacleData union type structure
@@ -339,7 +370,7 @@ class Simulator:
 
         return {
             "time": self.time,
-            "persons": persons_state,
+            "persons": persons_state, # アクティブな人のリスト
             "is_running": self.is_running,
             "environment": {
                 # Format walls similarly to match frontend WallData: { start: { position: [...] }, end: { position: [...] } }
