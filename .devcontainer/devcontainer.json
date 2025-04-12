@@ -20,14 +20,34 @@
 			"version": "latest"
 		},
 		// Add AWS CLI feature
-		"ghcr.io/devcontainers/features/aws-cli:1": {}
+		"ghcr.io/devcontainers/features/aws-cli:1": {},
+		// Add Docker CLI feature (for Docker-outside-of-Docker)
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {
+			"version": "latest",
+			"moby": false // Important for DooD
+		}
 	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
 
+	// Mount the host's Docker socket and AWS credentials
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker-host.sock,type=bind",
+		"source=${localEnv:HOME}/.aws,target=/root/.aws,type=bind,consistency=cached"
+	],
+
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "apt-get update && apt-get install -y cmake build-essential && pip install --no-cache-dir Cython && pip install --no-cache-dir -r requirements.txt",
+	// NOTE: The original requirements installation is likely handled by backend/Dockerfile now.
+	// Consider removing or adjusting this command if backend dependencies are managed there.
+	// "postCreateCommand": "apt-get update && apt-get install -y cmake build-essential && pip install --no-cache-dir Cython && pip install --no-cache-dir -r requirements.txt",
+	// Post create command for Docker socket permissions (if needed)
+	// "postCreateCommand": "sudo groupadd docker --gid $(stat -c '%g' /var/run/docker-host.sock) && sudo usermod -aG docker vscode && newgrp docker",
+
+	// Container environment variables
+	"containerEnv": {
+		"DOCKER_HOST": "unix:///var/run/docker-host.sock"
+	},
 
 	// Configure tool-specific properties.
 	"customizations": {
