@@ -1,9 +1,9 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { Line, OrbitControls } from '@react-three/drei'; // Line と OrbitControls をインポート
 
-// --- 型定義 (App.tsx と合わせる) ---
+// Linter Error 修正: ../types の代わりにインラインで型を定義
 interface Vector2D {
   position: [number, number];
 }
@@ -11,20 +11,13 @@ interface WallData {
   start: Vector2D;
   end: Vector2D;
 }
-interface BaseObstacleData {
+interface ObstacleData {
   type: 'circle' | 'rectangle';
   center: Vector2D;
+  radius?: number; // Optional for circle
+  width?: number; // Optional for rectangle
+  height?: number; // Optional for rectangle
 }
-interface CircleObstacleData extends BaseObstacleData {
-  type: 'circle';
-  radius: number;
-}
-interface RectangleObstacleData extends BaseObstacleData {
-  type: 'rectangle';
-  width: number;
-  height: number;
-}
-type ObstacleData = CircleObstacleData | RectangleObstacleData;
 interface EnvironmentData {
   walls: WallData[];
   obstacles: ObstacleData[];
@@ -32,8 +25,12 @@ interface EnvironmentData {
 interface PersonData {
   id: number;
   position: [number, number];
+  velocity: [number, number];
+  destination: [number, number];
+  size?: number; // Linter Error 修正: size をオプショナルで追加
+  speed?: number;
 }
-// --- 型定義ここまで ---
+// 型定義ここまで
 
 // Person を描画するコンポーネント
 const PersonAgent: React.FC<{ personData: PersonData }> = ({ personData }) => {
@@ -94,42 +91,136 @@ const Obstacle: React.FC<{ obstacleData: ObstacleData }> = ({ obstacleData }) =>
   return null; // Should not happen with correct types
 };
 
-// SimulationCanvas コンポーネントの Props の型定義
 interface SimulationCanvasProps {
   persons: PersonData[];
-  environment: EnvironmentData; // environment を Props に追加
+  environment: EnvironmentData;
+  destinations?: [number, number][]; // 目的地のリストを追加 (オプショナル)
 }
 
-const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environment }) => {
+const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environment, destinations }) => {
+  console.log("Canvas received destinations:", destinations); // ★ デバッグログ追加
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // --- Drawing Logic ---
+  const drawSimulation = (ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number, scale: number) => {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+    // Background
+    ctx.fillStyle = '#374151'; // gray-700
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    // 1. Draw Environment Walls
+    ctx.strokeStyle = '#9CA3AF'; // gray-400
+    ctx.lineWidth = 2;
+    environment.walls.forEach((wall: WallData) => {
+      ctx.beginPath();
+      ctx.moveTo(wall.start.position[0] * scale, wall.start.position[1] * scale);
+      ctx.lineTo(wall.end.position[0] * scale, wall.end.position[1] * scale);
+      ctx.stroke();
+    });
+
+    // 2. Draw Environment Obstacles
+    environment.obstacles.forEach((obstacle: ObstacleData) => {
+      if (obstacle.type === 'circle' && obstacle.radius !== undefined) {
+        ctx.fillStyle = '#6B7280'; // gray-500
+        ctx.beginPath();
+        ctx.arc(obstacle.center.position[0] * scale, obstacle.center.position[1] * scale, obstacle.radius * scale, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (obstacle.type === 'rectangle' && obstacle.width !== undefined && obstacle.height !== undefined) {
+        ctx.fillStyle = '#6B7280'; // gray-500
+        const halfWidth = (obstacle.width / 2) * scale;
+        const halfHeight = (obstacle.height / 2) * scale;
+        ctx.fillRect(
+          (obstacle.center.position[0] * scale) - halfWidth,
+          (obstacle.center.position[1] * scale) - halfHeight,
+          obstacle.width * scale,
+          obstacle.height * scale
+        );
+      }
+    });
+
+    // 3. Draw Destinations
+    if (destinations) {
+      ctx.fillStyle = '#EF4444'; // red-500
+      ctx.strokeStyle = '#FCA5A5'; // red-300
+      ctx.lineWidth = 1;
+      const destRadius = 0.15 * scale; // 目的地の描画サイズ
+      destinations.forEach(dest => {
+        ctx.beginPath();
+        ctx.arc(dest[0] * scale, dest[1] * scale, destRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke(); // Optional: add an outline
+      });
+    }
+
+    // 4. Draw Persons
+    ctx.fillStyle = '#34D399'; // emerald-400
+    ctx.strokeStyle = '#A7F3D0'; // emerald-200
+    ctx.lineWidth = 1;
+    persons.forEach((person: PersonData) => {
+      ctx.beginPath();
+      // Use person.size if available, otherwise default
+      const radius = (person.size ?? 0.2) * scale; // Linter Error 修正済み: size は PersonData に追加
+      ctx.arc(person.position[0] * scale, person.position[1] * scale, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      // Optional: Draw velocity vector
+      // Optional: Draw ID
+    });
+  };
+
+  // --- Resize and Render Effect ---
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let animationFrameId: number;
+
+    const resizeCanvas = () => {
+      // Get container dimensions
+      const { width: containerWidth, height: containerHeight } = container.getBoundingClientRect();
+      canvas.width = containerWidth;
+      canvas.height = containerHeight;
+
+      // Determine scale (fit environment within canvas)
+      // TODO: Get actual environment bounds if dynamic
+      const envWidthUnits = 10; // Example environment width
+      const envHeightUnits = 10; // Example environment height
+      const scaleX = canvas.width / envWidthUnits;
+      const scaleY = canvas.height / envHeightUnits;
+      const scale = Math.min(scaleX, scaleY) * 0.95; // Use 95% to add some padding
+
+      // Render loop
+      const render = () => {
+        drawSimulation(ctx, canvas.width, canvas.height, scale);
+        animationFrameId = requestAnimationFrame(render);
+      };
+      render();
+    };
+
+    // Initial resize and render
+    resizeCanvas();
+
+    // Resize listener
+    const resizeObserver = new ResizeObserver(resizeCanvas);
+    resizeObserver.observe(container);
+
+    // Cleanup
+    return () => {
+      resizeObserver.unobserve(container);
+      cancelAnimationFrame(animationFrameId);
+    };
+    // Re-run effect if persons or environment data changes
+  }, [persons, environment, destinations]); // destinations を依存配列に追加
+
   return (
-    <div className="w-full h-full">
-      {/* Lowered camera Y, moved Z back, set OrbitControls target */}
-      <Canvas camera={{ position: [5, 10, 18], fov: 55 }}>
-        <ambientLight intensity={0.6} />
-        <directionalLight position={[10, 10, 5]} intensity={1} />
-
-        {/* 地面: サイズを環境に合わせる (余裕を持たせる) */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[5, -0.5, 5]}> {/* 中心を (5,5) あたりに */}
-            <planeGeometry args={[25, 25]} /> {/* サイズ調整 */}
-            <meshStandardMaterial color={'#dddddd'} side={THREE.DoubleSide}/>
-        </mesh>
-
-        {/* 環境データの描画 */}
-        {environment.walls.map((wall, index) => (
-          <WallLine key={`wall-${index}`} wallData={wall} />
-        ))}
-        {environment.obstacles.map((obstacle, index) => (
-          <Obstacle key={`obstacle-${index}`} obstacleData={obstacle} />
-        ))}
-
-        {/* persons 配列をマップして PersonAgent を描画 */}
-        {persons.map((person) => (
-          <PersonAgent key={person.id} personData={person} />
-        ))}
-
-        {/* Set OrbitControls target to the center of the ground plane */}
-        <OrbitControls target={[5, 0, 5]} />
-      </Canvas>
+    <div ref={containerRef} style={{ width: '100%', height: '100%', overflow: 'hidden' }}>
+      <canvas ref={canvasRef} />
     </div>
   );
 };

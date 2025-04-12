@@ -22,14 +22,21 @@ CORS(app) # コメント解除して Flask アプリ全体で CORS を有効化
 # --- シミュレーターとスレッド管理 ---
 loader = DataLoader()
 environment = loader.load_environment()
-persons = loader.load_persons(num_persons=10)
+# persons = loader.load_persons(num_persons=10) # 修正前
+
+# デフォルトの目的地数（必要に応じて変更）
+initial_num_destinations = 1
+persons_data, destinations_data = loader.load_persons(
+    num_persons=10,
+    num_destinations=initial_num_destinations
+)
 
 # SIMULATION_DT を Simulator 初期化の前に定義する
 SIMULATION_DT = 0.05 # シミュレーションの時間刻み (秒)
 
 simulator_lock = threading.Lock()
-# Simulator の初期化時に dt を渡す
-simulator = Simulator(environment, persons, dt=SIMULATION_DT)
+# Simulator の初期化時に dt と destinations_data を渡す
+simulator = Simulator(environment, persons_data, destinations_data, dt=SIMULATION_DT)
 simulation_thread = None
 
 def simulation_loop():
@@ -85,6 +92,7 @@ def update_config():
     global simulator, environment, persons, loader, simulation_thread
     data = request.get_json()
     num_persons = data.get('num_persons', 10) # デフォルト値を設定
+    num_destinations_config = data.get('num_destinations', 1) # 目的地数を取得 (デフォルト1)
     print(f"Received new config: {data}")
 
     # 既存のスレッドを停止
@@ -92,9 +100,13 @@ def update_config():
 
     with simulator_lock:
         environment = loader.load_environment() # 再読み込み (ダミー)
-        persons = loader.load_persons(num_persons=num_persons) # 再読み込み (ダミー)
-        # Simulator の初期化時に dt を渡す
-        simulator = Simulator(environment, persons, dt=SIMULATION_DT)
+        # 目的地数を load_persons に渡す
+        persons_data, destinations_data = loader.load_persons(
+            num_persons=num_persons,
+            num_destinations=num_destinations_config
+        )
+        # Simulator の初期化時に destinations_data を渡す
+        simulator = Simulator(environment, persons_data, destinations_data, dt=SIMULATION_DT)
         print("Simulator re-initialized with new config.")
 
     # 再初期化後の状態を取得
@@ -102,7 +114,11 @@ def update_config():
     # 再初期化後の状態をemit
     socketio.emit('simulation_state_update', current_state)
     print("Emitted state after config update.")
-    return jsonify({"message": "Configuration updated and simulator reset.", "num_persons": num_persons})
+    return jsonify({
+        "message": "Configuration updated and simulator reset.",
+        "num_persons": num_persons,
+        "num_destinations": num_destinations_config # レスポンスにも含める
+    })
 
 @app.route('/api/simulation/start', methods=['POST'])
 def start_simulation():
@@ -180,9 +196,8 @@ def reset_simulation():
     num_persons_from_request = data.get('num_persons')
     num_obstacles_from_request = data.get('num_obstacles', 5)
     obstacle_avg_radius_from_request = data.get('obstacle_avg_radius', 0.5)
-    # --- Get obstacle_shape from request --- V
-    obstacle_shape_from_request = data.get('obstacle_shape', 'random') # Default to 'random'
-    # --- Get obstacle_shape from request --- ^
+    obstacle_shape_from_request = data.get('obstacle_shape', 'random')
+    num_destinations_from_request = data.get('num_destinations', 1) # 目的地数を取得 (デフォルト1)
 
     # 既存のスレッドを停止
     stop_running_simulation()
@@ -205,8 +220,13 @@ def reset_simulation():
             avg_radius=obstacle_avg_radius_from_request,
             obstacle_shape=obstacle_shape_from_request # Pass the shape
         )
-        persons = loader.load_persons(num_persons=num_persons)
-        simulator = Simulator(environment, persons, dt=SIMULATION_DT)
+        # 目的地数を load_persons に渡す
+        persons_data, destinations_data = loader.load_persons(
+            num_persons=num_persons,
+            num_destinations=num_destinations_from_request
+        )
+        # Simulator の初期化時に destinations_data を渡す
+        simulator = Simulator(environment, persons_data, destinations_data, dt=SIMULATION_DT)
         print("Simulator reset to initial state.")
         current_state = simulator.get_state()
 
@@ -214,13 +234,14 @@ def reset_simulation():
     socketio.emit('simulation_state_update', current_state)
     print("Emitted state after reset.")
 
-    # Return values including obstacle params for confirmation
+    # Return values including obstacle params and destinations for confirmation
     return jsonify({
         "message": "Simulator reset.",
         "num_persons": num_persons,
         "num_obstacles": num_obstacles_from_request,
         "obstacle_avg_radius": obstacle_avg_radius_from_request,
-        "obstacle_shape": obstacle_shape_from_request # Include shape in response
+        "obstacle_shape": obstacle_shape_from_request,
+        "num_destinations": num_destinations_from_request # レスポンスにも含める
     })
 
 @app.route('/api/simulation/state', methods=['GET'])

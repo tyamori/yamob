@@ -1,6 +1,8 @@
 import numpy as np
 import rvo2 # RVO2 ライブラリをインポート
 import random # Import random for obstacle generation
+from pydantic import BaseModel, Field
+from typing import List
 
 # --- Geometry Helper Functions ---
 def point_segment_distance(p, a, b):
@@ -93,9 +95,10 @@ class Simulator:
     シミュレーション全体を管理するクラス。
     RVO2ライブラリを使用して衝突回避を行う。
     """
-    def __init__(self, environment, persons, dt=0.1):
+    def __init__(self, environment, persons, destinations, dt=0.1):
         self.environment = environment
         self.persons = {} # person.id -> Person object
+        self.destinations = destinations # 目的地リストを保存
         self.time = 0.0
         self.dt = dt
         self.is_running = False
@@ -345,7 +348,8 @@ class Simulator:
                     for w in self.environment.walls
                 ],
                 "obstacles": formatted_obstacles # Use the formatted list
-            }
+            },
+            "destinations": self.destinations # 目的地リストを追加
         }
 
 class DataLoader:
@@ -442,44 +446,88 @@ class DataLoader:
 
         return Environment(walls=walls, obstacles=obstacles)
 
-    # Modified to generate random destinations within bounds
-    def load_persons(self, filepath=None, num_persons=5, env_width=10.0, env_height=10.0):
+    # Modified to generate random destinations along the walls
+    def load_persons(self, filepath=None, num_persons=5, num_destinations=1, env_width=10.0, env_height=10.0):
         """
         人物データをロードまたは生成する。
-        現在はランダムな位置と目的地を持つ人物を生成。
+        指定された数の目的地を壁際にランダムに生成し、各人物にランダムに割り当てる。
         Args:
             filepath: 人物データのファイルパス (現在は未使用)
             num_persons: 生成する人物の数
+            num_destinations: 生成する目的地の数 (壁際に生成)
             env_width: 環境の幅 (目的地生成に使用)
             env_height: 環境の高さ (目的地生成に使用)
         Returns:
-            list[Person]: 生成された Person オブジェクトのリスト
+            tuple[list[Person], list[list[float]]]: 生成された Person オブジェクトのリストと、目的地座標のリスト
         """
-        print(f"Generating {num_persons} persons...")
+        print(f"Generating {num_persons} persons with {num_destinations} wall destinations...")
         persons = []
-        # Simple placement attempt limit
         max_attempts = num_persons * 10
         attempts = 0
         person_radius = 0.2 # Match default RVO agent radius
+        buffer = person_radius + 0.2 # Buffer for initial position and destination generation
 
+        # --- Generate Destinations on Walls ---
+        generated_destinations = [] # 変数名を変更 generated_destinations
+        wall_buffer = 0.1 # Small buffer from the absolute edge
+        max_dest_attempts = num_destinations * 20
+        dest_attempts = 0
+        while len(generated_destinations) < num_destinations and dest_attempts < max_dest_attempts:
+            dest_attempts += 1
+            wall = random.choice(['top', 'bottom', 'left', 'right'])
+            dest_x, dest_y = 0.0, 0.0
+            if wall == 'top':
+                dest_y = wall_buffer
+                dest_x = random.uniform(wall_buffer, env_width - wall_buffer)
+            elif wall == 'bottom':
+                dest_y = env_height - wall_buffer
+                dest_x = random.uniform(wall_buffer, env_width - wall_buffer)
+            elif wall == 'left':
+                dest_x = wall_buffer
+                dest_y = random.uniform(wall_buffer, env_height - wall_buffer)
+            else: # right
+                dest_x = env_width - wall_buffer
+                dest_y = random.uniform(wall_buffer, env_height - wall_buffer)
+
+            new_dest = [dest_x, dest_y]
+
+            # Avoid placing destinations too close to each other (optional)
+            is_too_close = False
+            min_dest_dist_sq = (person_radius * 4)**2 # Example: Avoid destinations closer than 4 radii
+            for existing_dest in generated_destinations:
+                dist_sq = (new_dest[0] - existing_dest[0])**2 + (new_dest[1] - existing_dest[1])**2
+                if dist_sq < min_dest_dist_sq:
+                    is_too_close = True
+                    break
+            if not is_too_close:
+                generated_destinations.append(new_dest)
+
+        if len(generated_destinations) < num_destinations:
+             print(f"Warning: Could only place {len(generated_destinations)} out of {num_destinations} requested destinations.")
+        if not generated_destinations: # Ensure at least one destination if possible
+            print("Error: Could not generate any destinations. Placing one default destination.")
+            # Fallback to a corner or center if wall generation fails completely
+            generated_destinations.append([wall_buffer, wall_buffer]) # Default fallback
+
+        print(f"Generated destinations: {generated_destinations}")
+
+        # --- Generate Persons ---
         while len(persons) < num_persons and attempts < max_attempts:
             attempts += 1
             # Initial position (ensure not inside walls initially)
-            buffer = person_radius + 0.2
             pos_x = random.uniform(buffer, env_width - buffer)
             pos_y = random.uniform(buffer, env_height - buffer)
             initial_pos = [pos_x, pos_y]
 
-            # Random destination within bounds
-            dest_x = random.uniform(buffer, env_width - buffer)
-            dest_y = random.uniform(buffer, env_height - buffer)
-            destination = [dest_x, dest_y]
+            # --- Assign a random destination from the generated list ---
+            assigned_destination = random.choice(generated_destinations)
 
             # Basic overlap check for initial positions
             is_overlapping = False
             for p in persons:
                 dist_sq = (initial_pos[0] - p.position[0])**2 + (initial_pos[1] - p.position[1])**2
-                if dist_sq < (person_radius * 2 + 0.1)**2:
+                # Check against slightly more than double radius to prevent initial stuck states
+                if dist_sq < (person_radius * 2.1)**2:
                     is_overlapping = True
                     break
             # TODO: Also check overlap with obstacles if needed at start
@@ -490,11 +538,42 @@ class DataLoader:
                     initial_position=initial_pos,
                     speed=random.uniform(0.8, 1.2), # Random speed
                     size=person_radius,
-                    destination=destination
+                    destination=assigned_destination # Assign one of the wall destinations
                 ))
             # else: print("Person placement attempt failed due to overlap.")
 
         if len(persons) < num_persons:
             print(f"Warning: Could only place {len(persons)} out of {num_persons} requested persons.")
 
-        return persons 
+        # 戻り値をタプルに変更
+        return persons, generated_destinations
+
+class Position(BaseModel):
+    x: int
+    y: int
+
+class AgentState(BaseModel):
+    id: int
+    position: Position
+    destination: Position
+    path: List[Position] = []
+    is_active: bool = True
+
+class SimulationConfig(BaseModel):
+    grid_width: int = Field(50, ge=10, le=200)
+    grid_height: int = Field(50, ge=10, le=200)
+    num_agents: int = Field(10, ge=1, le=500)
+    max_steps: int = Field(200, ge=10, le=1000)
+    noise_level: float = Field(0.1, ge=0.0, le=1.0)
+    num_destinations: int = Field(1, ge=1, le=10) # 目的地数を追加
+
+class SimulationStep(BaseModel):
+    step: int
+    agents: List[AgentState]
+
+class SimulationResult(BaseModel):
+    config: SimulationConfig
+    history: List[SimulationStep]
+
+class ObstacleConfig(BaseModel):
+    positions: List[Position] 

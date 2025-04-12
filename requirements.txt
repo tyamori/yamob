@@ -4,5 +4,6 @@ Flask-Cors>=3.0
 Flask-SocketIO>=5.0
 eventlet>=0.30
 Cython # rvo2 のビルドに必要
+pydantic>=2.0 # Pydantic を追加
 # RVO2 は PyPI にないので GitHub から直接インストール
 git+https://github.com/sybrenstuvel/Python-RVO2.git 

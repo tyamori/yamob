@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import io, { Socket } from 'socket.io-client';
+import React, { useState, useEffect, useCallback } from 'react';
+import io from 'socket.io-client';
 // import logo from './logo.svg';
 // import './App.css';
 import SimulationCanvas from './components/SimulationCanvas';
 import ControlPanel from './components/ControlPanel';
 import { ArrowPathIcon } from '@heroicons/react/24/solid';
+// import { SimulationState } from './types'; // SimulationState 型をインポート
 // import { SimulationState, Person, Environment } from './types'; // Temporarily commented out as types file/dir not found
 
 // --- 型定義 ---
@@ -56,209 +57,194 @@ interface SimulationState {
   persons: PersonData[];
   is_running: boolean;
   environment: EnvironmentData;
+  destinations?: Vector2D[];
 }
 // --- 型定義ここまで ---
 
-// Socket.IO サーバーの URL (バックエンドと同じポート) - プロキシを使うので不要になる可能性あり
-// const SOCKET_SERVER_URL = 'http://localhost:5001';
+// WebSocketサーバーのURL (環境変数から取得するか、デフォルト値を設定)
+// Linter Error: Cannot find name 'process' -> Use import.meta.env for Vite
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
 
-// --- API & Socket URLs --- - プロキシを使うので不要
-// const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+// Linter Error 修正: 重複定義を削除
+// type SimulationState = any;
 
 function App() {
-  // 初期状態を定義
-  const initialEnvironment: EnvironmentData = { walls: [], obstacles: [] };
-  const initialSimulationState: SimulationState = {
-      time: 0,
-      persons: [],
-      is_running: false,
-      environment: initialEnvironment
-  };
-  const [simulationState, setSimulationState] = useState<SimulationState>(initialSimulationState);
-  // Socket インスタンスを保持するための ref
-  const socketRef = useRef<Socket | null>(null);
-  // API から受け取るデータ型の any を回避するための Raw 型 (より厳密に定義も可能)
-  type RawSimulationState = Omit<SimulationState, 'environment'> & { environment: { walls: [number,number][][], obstacles: any[] } }; // Use any[] for raw obstacles initially
-  // ControlPanel に渡す初期人数を state で管理
-  const [activeNumPersons, setActiveNumPersons] = useState<number>(10);
-  // --- Add state for obstacle parameters --- V
-  const [activeNumObstacles, setActiveNumObstacles] = useState<number>(5); // Default 5 obstacles
-  const [activeObstacleAvgRadius, setActiveObstacleAvgRadius] = useState<number>(0.5); // Default 0.5 radius
-  // --- Add state for obstacle shape --- V
-  const [activeObstacleShape, setActiveObstacleShape] = useState<'random' | 'circle' | 'rectangle'>('random'); // Default to random
-  // --- Add state for obstacle parameters --- ^
+  const [simulationState, setSimulationState] = useState<any | null>(null); // Use any for now
+  const [socket, setSocket] = useState<any>(null); // Socket.IOクライアントインスタンス
+  const [isConnected, setIsConnected] = useState(false); // WebSocket接続状態
+  const [error, setError] = useState<string | null>(null);
 
-  // --- API ハンドラ関数 ---
-  const handleStart = async () => {
-    try {
-      // API_BASE_URL を削除し、プロキシ経由の相対パスを使用
-      const response = await fetch(`/api/simulation/start`, { method: 'POST' });
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
-      console.log('Start simulation response:', data);
-      // 状態更新は WebSocket 経由で行われるため、ここでは何もしない
-    } catch (error) {
-      console.error("Failed to start simulation:", error);
-    }
-  };
+  // ControlPanel のための状態 (設定適用時にAPIに送る用)
+  const [numPersons, setNumPersons] = useState<number>(10); // Default value
+  const [numObstacles, setNumObstacles] = useState<number>(5); // Default value
+  const [obstacleAvgRadius, setObstacleAvgRadius] = useState<number>(0.5); // Default value
+  const [obstacleShape, setObstacleShape] = useState<'random' | 'circle' | 'rectangle'>('random'); // Default value
+  const [numDestinations, setNumDestinations] = useState<number>(1); // 目的地数の状態を追加 (初期値1)
 
-  const handleStop = async () => {
-    try {
-      // API_BASE_URL を削除し、プロキシ経由の相対パスを使用
-      const response = await fetch(`/api/simulation/stop`, { method: 'POST' });
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
-      console.log('Stop simulation response:', data);
-      // 状態更新は WebSocket 経由
-    } catch (error) {
-      console.error("Failed to stop simulation:", error);
-    }
-  };
-
-  const handleReset = async (numPersons: number, numObs: number, avgRad: number, shape: string) => {
-    console.log(`Resetting simulation with ${numPersons} persons, ${numObs} ${shape} obstacles, avg radius ${avgRad}...`);
-    try {
-      const response = await fetch(`/api/simulation/reset`, {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({
-            num_persons: numPersons,
-            num_obstacles: numObs,
-            obstacle_avg_radius: avgRad,
-            obstacle_shape: shape
-         })
-      });
-      if (!response.ok) { throw new Error(`HTTP error! status: ${response.status}`); }
-      const data = await response.json();
-      console.log('Reset simulation response:', data);
-      // Update active settings state based on response (this confirms the applied settings)
-      setActiveNumPersons(data.num_persons);
-      setActiveNumObstacles(data.num_obstacles);
-      setActiveObstacleAvgRadius(data.obstacle_avg_radius);
-      // Backend currently doesn't echo back the shape, keep frontend state
-      // setActiveObstacleShape(data.obstacle_shape); // Uncomment if backend sends it back
-    } catch (error) {
-      console.error("Failed to reset simulation:", error);
-    }
-  };
-
-  // --- useEffect (WebSocket 関連) ---
   useEffect(() => {
-    const fetchInitialState = async () => {
-      try {
-        const response = await fetch(`/api/simulation/state`);
-        if (!response.ok) { throw new Error(`HTTP error! status: ${response.status}`); }
-        const initialState = await response.json() as SimulationState;
-        setSimulationState(initialState);
-        // Also set the initial active settings based on fetched state
-        setActiveNumPersons(initialState.persons.length);
-        // TODO: Infer initial obstacle settings from initialState.environment.obstacles if possible?
-        // For now, keep the default active settings on initial load.
-        // setActiveNumObstacles(initialState.environment.obstacles.length);
-        // setActiveObstacleAvgRadius(...); // Hard to infer average radius
-        // setActiveObstacleShape(...); // Hard to infer shape mix
-        console.log('Fetched initial state:', initialState);
-      } catch (error) { 
-        console.error("Failed to fetch initial state:", error);
-        setActiveNumPersons(10);
+    // Socket.IOクライアントの初期化と接続
+    const newSocket = io(SOCKET_URL);
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('Connected to WebSocket server.');
+      setIsConnected(true);
+      setError(null);
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('Disconnected from WebSocket server.');
+      setIsConnected(false);
+    });
+
+    newSocket.on('connect_error', (err) => {
+      console.error('WebSocket connection error:', err);
+      setError(`WebSocket connection error: ${err.message}. Is the backend running?`);
+      setIsConnected(false);
+    });
+
+    // シミュレーション状態更新イベントのリスナー
+    newSocket.on('simulation_state_update', (data: any) => { // Use any for now
+      console.log("Received state via WebSocket:", data); // ★ デバッグログ追加
+      setSimulationState(data);
+      // Sync numPersons if it differs (example)
+      if (data && data.persons && data.persons.length !== numPersons) {
+        console.log(`Syncing numPersons state: ${data.persons.length}`);
+        setNumPersons(data.persons.length);
       }
-    };
-    fetchInitialState();
-
-    socketRef.current = io({ reconnectionAttempts: 5, reconnectionDelay: 1000 });
-    console.log('Connecting to Socket.IO server via proxy...');
-    const socket = socketRef.current;
-
-    socket.on('connect', () => {
-      console.log('Connected to Socket.IO server with id:', socket.id);
+      // TODO: Sync other control panel settings if needed based on received state
     });
-    socket.on('simulation_state_update', (newState: SimulationState) => { // Type assert directly
-       // No more manual mapping needed if backend format matches
-      setSimulationState(newState);
-      setActiveNumPersons(newState.persons.length);
-    });
-    socket.on('connect_error', (err) => { console.error('Socket.IO connection error:', err.message); });
-    socket.on('disconnect', (reason) => { console.log('Disconnected from Socket.IO server:', reason); });
 
+    // コンポーネントのアンマウント時にクリーンアップ
     return () => {
-      console.log('Disconnecting from Socket.IO server...');
-      socket.disconnect();
-      socketRef.current = null;
+      console.log("Disconnecting socket...");
+      newSocket.disconnect();
     };
+    // Empty dependency array: run only on mount/unmount
   }, []);
 
-  // Handler for applying settings from ControlPanel
-  const handleApplySettings = (settings: {
+  // Generic API call handler
+  const handleApiCall = async (endpoint: string, method: string = 'POST', body: object | null = null): Promise<any | null> => {
+    try {
+      const options: RequestInit = {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      };
+      if (body && method !== 'GET') {
+        options.body = JSON.stringify(body);
+      }
+
+      const response = await fetch(`${SOCKET_URL}${endpoint}`, options);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(`API Error (${response.status}): ${errorData.message || 'Failed to fetch'}`);
+      }
+      return await response.json(); // Returns parsed JSON or null on error
+    } catch (err: any) {
+      console.error(`Error calling API endpoint ${endpoint}:`, err);
+      setError(`API Call Error: ${err.message}`);
+      return null; // Indicate error by returning null
+    }
+  };
+
+  const handleStart = () => handleApiCall('/api/simulation/start');
+  const handleStop = () => handleApiCall('/api/simulation/stop');
+
+  // Apply Settings handler
+  const handleApplySettings = useCallback(async (settings: {
     numPersons: number;
     numObstacles: number;
     obstacleAvgRadius: number;
     obstacleShape: 'random' | 'circle' | 'rectangle';
+    numDestinations: number;
   }) => {
     console.log("Applying settings:", settings);
-    // Call handleReset with the new settings
-    handleReset(
-        settings.numPersons,
-        settings.numObstacles,
-        settings.obstacleAvgRadius,
-        settings.obstacleShape
-    );
-    // Note: handleReset now updates the active... state variables upon successful response
-  };
+    // Update local state immediately
+    setNumPersons(settings.numPersons);
+    setNumObstacles(settings.numObstacles);
+    setObstacleAvgRadius(settings.obstacleAvgRadius);
+    setObstacleShape(settings.obstacleShape);
+    setNumDestinations(settings.numDestinations);
+
+    // Call reset API
+    const result = await handleApiCall('/api/simulation/reset', 'POST', {
+      num_persons: settings.numPersons,
+      num_obstacles: settings.numObstacles,
+      obstacle_avg_radius: settings.obstacleAvgRadius,
+      obstacle_shape: settings.obstacleShape,
+      num_destinations: settings.numDestinations
+    });
+
+    // Check API call result
+    if (result !== null) {
+      console.log("Settings applied via API.", result);
+      // Optional: Verify backend response
+      if (result.num_persons !== settings.numPersons) {
+        console.warn(`Backend num_persons mismatch: ${result.num_persons}`);
+        // Optionally re-sync local state: setNumPersons(result.num_persons);
+      }
+      if (result.num_destinations !== settings.numDestinations) {
+         console.warn(`Backend num_destinations mismatch: ${result.num_destinations}`);
+         // Optionally re-sync local state: setNumDestinations(result.num_destinations);
+      }
+      // Backend should emit new state via WebSocket
+    } else {
+      console.error("Failed to apply settings via API.");
+      setError("Failed to apply settings. Check backend. UI might be out of sync.");
+      // Optionally revert local state changes
+    }
+  }, []);
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-gray-100">
-      <header className="text-center py-4 px-4 sm:px-6 lg:px-8 flex-shrink-0 border-b border-gray-700">
-        <h1 className="text-3xl font-bold mb-1">yamob</h1>
-        <p className="text-sm text-gray-500 mb-3">"Yet Another Mobility". It is library for mobility simulator.</p>
-        {/* Centered container for time, status toggle, and reset */}
-        <div className="flex justify-center items-center gap-3 text-base">
-          {/* Time Display */}
-          <span className="bg-gray-700 px-3 py-1 rounded">
-            Time: {simulationState.time.toFixed(2)}s
-          </span>
-          {/* Start/Stop Toggle Button */}
-          <button
-            onClick={simulationState.is_running ? handleStop : handleStart}
-            className={`px-4 py-1 rounded font-semibold ${simulationState.is_running ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white'}`}
-          >
-            {simulationState.is_running ? 'Stop' : 'Start'}
-          </button>
-          {/* Update reset button onClick to use *active* settings */}
-          <button
-            onClick={() => handleReset(activeNumPersons, activeNumObstacles, activeObstacleAvgRadius, activeObstacleShape)}
-            title="Reset Simulation with Current Settings"
-            className="p-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white"
-          >
-            <ArrowPathIcon className="h-5 w-5" />
-          </button>
+    <div className="App min-h-screen bg-gray-900 text-white flex flex-col">
+      <header className="bg-gray-800 shadow-md p-4">
+        <h1 className="text-2xl font-bold text-center text-indigo-400">人流シミュレーター</h1>
+        <div className="text-center text-sm mt-1">
+          {isConnected ? <span className="text-green-400">● 接続済み</span> : <span className="text-red-400">● 未接続</span>}
         </div>
-      </header>
-      <main className="flex flex-1 overflow-hidden p-6 gap-6 min-h-0">
-        <div className="flex-1 flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-hidden">
-          <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600">Simulation View</h2>
-          <div className="flex-1 relative">
-            <SimulationCanvas
-              persons={simulationState.persons}
-              environment={simulationState.environment}
-            />
+        {error && (
+          <div className="bg-red-800 text-red-100 p-3 mt-2 rounded border border-red-600 text-sm">
+            <strong>Error:</strong> {error}
           </div>
+        )}
+      </header>
+
+      <main className="flex-grow flex flex-col md:flex-row overflow-hidden">
+        <div className="flex-grow w-full h-[60vh] md:h-auto md:w-3/4 bg-gray-700 overflow-hidden">
+          <SimulationCanvas
+             persons={simulationState?.persons ?? []}
+             environment={simulationState?.environment ?? { walls: [], obstacles: [] }}
+             destinations={simulationState?.destinations}
+           />
         </div>
-        <div className="w-72 flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-y-auto">
-          {/* Changed title to Conditions and adjusted sticky header */}
-          <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600 sticky top-0 z-10">Conditions</h2>
-          <div className="p-4">
-            {/* Pass active settings state and the apply handler to ControlPanel */}
-            <ControlPanel
-              activeNumPersons={activeNumPersons}
-              activeNumObstacles={activeNumObstacles}
-              activeObstacleAvgRadius={activeObstacleAvgRadius}
-              activeObstacleShape={activeObstacleShape}
-              onApplySettings={handleApplySettings}
-            />
+
+        <div className="w-full md:w-1/4 bg-gray-800 p-4 overflow-y-auto shadow-lg">
+          <h2 className="text-xl font-semibold mb-4 text-indigo-300">コントロールパネル</h2>
+          <ControlPanel
+            activeNumPersons={numPersons}
+            activeNumObstacles={numObstacles}
+            activeObstacleAvgRadius={obstacleAvgRadius}
+            activeObstacleShape={obstacleShape}
+            activeNumDestinations={numDestinations}
+            onApplySettings={handleApplySettings}
+          />
+          <div className="mt-6 space-y-3">
+            <button
+              onClick={handleStart}
+              disabled={!isConnected || simulationState?.is_running}
+              className="w-full px-4 py-2 rounded font-semibold bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              開始
+            </button>
+            <button
+              onClick={handleStop}
+              disabled={!isConnected || !simulationState?.is_running}
+              className="w-full px-4 py-2 rounded font-semibold bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              停止
+            </button>
           </div>
         </div>
       </main>

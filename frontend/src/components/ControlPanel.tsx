@@ -6,6 +6,7 @@ interface ControlPanelProps {
   activeNumObstacles: number;
   activeObstacleAvgRadius: number;
   activeObstacleShape: 'random' | 'circle' | 'rectangle';
+  activeNumDestinations: number;
   // Removed individual change handlers
   // Added a handler to apply all settings at once
   onApplySettings: (settings: {
@@ -13,6 +14,7 @@ interface ControlPanelProps {
     numObstacles: number;
     obstacleAvgRadius: number;
     obstacleShape: 'random' | 'circle' | 'rectangle';
+    numDestinations: number;
   }) => void;
 }
 
@@ -21,6 +23,7 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   activeNumObstacles,
   activeObstacleAvgRadius,
   activeObstacleShape,
+  activeNumDestinations,
   onApplySettings
 }) => {
   // Local state for inputs, initialized by props
@@ -28,12 +31,14 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const [numObstacles, setNumObstacles] = useState<number>(activeNumObstacles);
   const [obstacleAvgRadius, setObstacleAvgRadius] = useState<number>(activeObstacleAvgRadius);
   const [obstacleShape, setObstacleShape] = useState(activeObstacleShape);
+  const [numDestinations, setNumDestinations] = useState<number>(activeNumDestinations);
 
   // Sync local state if props change (e.g., after external reset or apply)
   useEffect(() => { setNumPersons(activeNumPersons); }, [activeNumPersons]);
   useEffect(() => { setNumObstacles(activeNumObstacles); }, [activeNumObstacles]);
   useEffect(() => { setObstacleAvgRadius(activeObstacleAvgRadius); }, [activeObstacleAvgRadius]);
   useEffect(() => { setObstacleShape(activeObstacleShape); }, [activeObstacleShape]);
+  useEffect(() => { setNumDestinations(activeNumDestinations); }, [activeNumDestinations]);
 
   // Input change handlers now only update local state
   const handleNumPersonsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -51,6 +56,10 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
   const handleShapeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     setObstacleShape(event.target.value as 'random' | 'circle' | 'rectangle');
   };
+  const handleNumDestinationsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(event.target.value, 10);
+    setNumDestinations(isNaN(value) || value < 1 ? 1 : (value > 10 ? 10 : value));
+  };
 
   // Handler for the Apply Settings button
   const handleApplyClick = () => {
@@ -58,7 +67,8 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
       numPersons,
       numObstacles,
       obstacleAvgRadius,
-      obstacleShape
+      obstacleShape,
+      numDestinations
     });
   };
 
@@ -123,6 +133,21 @@ const ControlPanel: React.FC<ControlPanelProps> = ({
           <option value="circle">円</option>
           <option value="rectangle">矩形</option>
         </select>
+      </div>
+
+      <div>
+        <label htmlFor="numDestinations" className="block text-sm font-medium text-gray-300 mb-1">
+          目的地の数 (壁際):
+        </label>
+        <input
+          type="number"
+          id="numDestinations"
+          value={numDestinations}
+          onChange={handleNumDestinationsChange}
+          className="block w-full px-3 py-2 border border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm bg-gray-700 text-gray-100"
+          min="1"
+          max="10"
+        />
       </div>
 
       <button
