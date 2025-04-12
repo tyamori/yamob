@@ -52,26 +52,38 @@ def simulation_loop():
 
         with simulator_lock:
             if not simulator.is_running:
-                print("Simulator is not running, exiting loop.")
-                break
-            simulator.step()
-            # emit 間隔に基づいて状態を取得
-            current_time = time.time()
-            if current_time - last_emit_time >= EMIT_INTERVAL:
-                 state_to_emit = simulator.get_state() # emit する状態を取得
-                 last_emit_time = current_time
+                print("Simulator is not running (detected at loop start), exiting loop.")
+                break # ループ開始時に既に停止していたら抜ける
 
-        # ロックの外で emit を行う (emit はブロッキングする可能性があるため)
+            simulator.step() # ステップ実行
+
+            # ★ステップ実行後に停止したか確認★
+            if not simulator.is_running:
+                print("Simulator stopped during step. Getting final state.")
+                state_to_emit = simulator.get_state() # ★停止した場合、最後の状態を取得
+                # ループはこの後抜ける（下の emit 処理は実行される）
+            else:
+                 # 実行中なら、emit 間隔に基づいて状態を取得
+                current_time = time.time()
+                if current_time - last_emit_time >= EMIT_INTERVAL:
+                    state_to_emit = simulator.get_state() # emit する状態を取得
+                    last_emit_time = current_time
+
+        # ロックの外で emit を行う
         if state_to_emit:
-            # 'simulation_state_update' というイベント名で状態を送信
             socketio.emit('simulation_state_update', state_to_emit)
             # print(f"Emitted state at time {state_to_emit['time']:.2f}")
+
+        # ★再度ロックを取得して、ループを継続するか最終確認★
+        with simulator_lock:
+             if not simulator.is_running:
+                 print("Simulator is not running (detected before sleep), exiting loop.")
+                 break # 停止していたらループを抜ける
 
         # ループの実行時間を考慮してスリープ時間を計算
         loop_end_time = time.time()
         elapsed_time = loop_end_time - loop_start_time
         sleep_time = max(0, SIMULATION_DT - elapsed_time)
-        # time.sleep(sleep_time) # eventlet を使う場合は socketio.sleep が推奨される
         socketio.sleep(sleep_time)
 
     print("Simulation thread finished.")
