@@ -1,0 +1,61 @@
+{
+	"name": "Yamob Python Dev Container",
+	"build": {
+		"dockerfile": "Dockerfile"
+	},
+
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	"features": {
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts"
+		},
+		"ghcr.io/devcontainers/features/common-utils:2": {
+			"installCMake": true,
+			"installOhMyZsh": false,
+			"upgradePackages": true,
+			"configureZshAsDefaultShell": false
+		},
+		// Add Terraform feature
+		"ghcr.io/devcontainers/features/terraform:1": {
+			"version": "latest"
+		},
+		// Add AWS CLI feature
+		"ghcr.io/devcontainers/features/aws-cli:1": {}
+	},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": "apt-get update && apt-get install -y cmake build-essential && pip install --no-cache-dir Cython && pip install --no-cache-dir -r requirements.txt",
+
+	// Configure tool-specific properties.
+	"customizations": {
+		"vscode": {
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"[python]": {
+					"editor.defaultFormatter": "astral-sh.ruff-vscode",
+					"editor.formatOnSave": true,
+					"editor.codeActionsOnSave": {
+						"source.fixAll": "explicit",
+						"source.organizeImports": "explicit"
+					}
+				},
+				"python.linting.enabled": true,
+				"python.formatting.provider": "none"
+			},
+			"extensions": [
+				"ms-python.python",
+				"astral-sh.ruff-vscode"
+				// Add other useful extensions here, e.g.:
+				// "ms-azuretools.vscode-docker",
+				// "eamodio.gitlens",
+				// "tamasfe.even-better-toml"
+			]
+		}
+	},
+
+	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "root"
+} 
