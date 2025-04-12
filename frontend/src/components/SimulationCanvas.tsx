@@ -11,10 +11,20 @@ interface WallData {
   start: Vector2D;
   end: Vector2D;
 }
-interface ObstacleData {
+interface BaseObstacleData {
+  type: 'circle' | 'rectangle';
   center: Vector2D;
+}
+interface CircleObstacleData extends BaseObstacleData {
+  type: 'circle';
   radius: number;
 }
+interface RectangleObstacleData extends BaseObstacleData {
+  type: 'rectangle';
+  width: number;
+  height: number;
+}
+type ObstacleData = CircleObstacleData | RectangleObstacleData;
 interface EnvironmentData {
   walls: WallData[];
   obstacles: ObstacleData[];
@@ -60,15 +70,28 @@ const WallLine: React.FC<{ wallData: WallData }> = ({ wallData }) => {
   );
 };
 
-// 障害物 (円柱) を描画するコンポーネント
-const ObstacleCircle: React.FC<{ obstacleData: ObstacleData }> = ({ obstacleData }) => {
-  return (
-    // 位置を設定 (Y座標は円柱の高さの半分にするなど調整可)
-    <mesh position={[obstacleData.center.position[0], 0.25, obstacleData.center.position[1]]}>
-      <cylinderGeometry args={[obstacleData.radius, obstacleData.radius, 0.5, 32]} /> {/* 半径、高さ、分割数 */}
-      <meshStandardMaterial color={'gray'} />
-    </mesh>
-  );
+// Unified Obstacle component to render different shapes
+const Obstacle: React.FC<{ obstacleData: ObstacleData }> = ({ obstacleData }) => {
+  if (obstacleData.type === 'circle') {
+    // Render cylinder for circle
+    return (
+      <mesh position={[obstacleData.center.position[0], 0.25, obstacleData.center.position[1]]}>
+        {/* Use radius from CircleObstacleData */}
+        <cylinderGeometry args={[obstacleData.radius, obstacleData.radius, 0.5, 32]} />
+        <meshStandardMaterial color={'gray'} />
+      </mesh>
+    );
+  } else if (obstacleData.type === 'rectangle') {
+    // Render box for rectangle
+    return (
+      <mesh position={[obstacleData.center.position[0], 0.25, obstacleData.center.position[1]]}>
+        {/* Use width/height from RectangleObstacleData. Depth is arbitrary (e.g., 0.5) */}
+        <boxGeometry args={[obstacleData.width, 0.5, obstacleData.height]} />
+        <meshStandardMaterial color={'dimgray'} /> {/* Different color for distinction */}
+      </mesh>
+    );
+  }
+  return null; // Should not happen with correct types
 };
 
 // SimulationCanvas コンポーネントの Props の型定義
@@ -96,7 +119,7 @@ const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environmen
           <WallLine key={`wall-${index}`} wallData={wall} />
         ))}
         {environment.obstacles.map((obstacle, index) => (
-          <ObstacleCircle key={`obstacle-${index}`} obstacleData={obstacle} />
+          <Obstacle key={`obstacle-${index}`} obstacleData={obstacle} />
         ))}
 
         {/* persons 配列をマップして PersonAgent を描画 */}
