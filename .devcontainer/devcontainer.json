@@ -14,7 +14,13 @@
 			"installOhMyZsh": false,
 			"upgradePackages": true,
 			"configureZshAsDefaultShell": false
-		}
+		},
+		// Add Terraform feature
+		"ghcr.io/devcontainers/features/terraform:1": {
+			"version": "latest"
+		},
+		// Add AWS CLI feature
+		"ghcr.io/devcontainers/features/aws-cli:1": {}
 	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.

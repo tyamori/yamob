@@ -29,7 +29,6 @@ frontend/*.log
 # Node.js files in root (if unintentional)
 /node_modules/
 package.json
-package-lock.json
 
 # IDE / Editor specific
 .idea/
