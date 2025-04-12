@@ -122,29 +122,41 @@ def update_config():
 
 @app.route('/api/simulation/start', methods=['POST'])
 def start_simulation():
-    global simulation_thread, simulator
+    global simulation_thread, simulator, environment, persons, loader
     print("Attempting to start simulation...")
     state_changed = False
     current_state = None
+
     with simulator_lock:
         if not simulator.is_running:
+            if simulator.is_simulation_complete():
+                print("Simulation completed previously. Resetting before starting...")
+                num_persons_reset = len(simulator.persons) if simulator.persons else 10
+                num_destinations_reset = len(simulator.destinations) if simulator.destinations else 1
+                print(f"Resetting with {num_persons_reset} persons, {num_destinations_reset} destinations.")
+                persons_data, destinations_data = loader.load_persons(
+                    num_persons=num_persons_reset,
+                    num_destinations=num_destinations_reset
+                )
+                simulator = Simulator(environment, persons_data, destinations_data, dt=SIMULATION_DT)
+                print("Simulator re-initialized with new agents and destinations.")
+
             simulator.is_running = True
             simulation_thread = threading.Thread(target=simulation_loop, daemon=True)
             simulation_thread.start()
             print("Simulation thread initiated.")
             state_changed = True
-            current_state = simulator.get_state() # 開始直後の状態
+            current_state = simulator.get_state()
         else:
             print("Simulation is already running.")
-            current_state = simulator.get_state() # 実行中の状態
+            current_state = simulator.get_state()
 
-    # 状態が変わった場合、または常に現在の状態を返すために emit
     if current_state:
         socketio.emit('simulation_state_update', current_state)
         print(f"Emitted state after start request. is_running: {current_state['is_running']}")
 
     if state_changed:
-        return jsonify({"message": "Simulation started."})
+        return jsonify({"message": "Simulation started (or reset and started)."})
     else:
         return jsonify({"message": "Simulation is already running."}), 400
 
