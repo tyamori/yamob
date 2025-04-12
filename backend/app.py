@@ -88,6 +88,11 @@ def simulation_loop():
 
     print("Simulation thread finished.")
 
+# --- ルートパスのハンドラを追加 ---
+@app.route('/')
+def index():
+    return "Backend server is running."
+
 # --- API エンドポイント (変更なし、ただし state から step 削除) ---
 @app.route('/api/config', methods=['GET'])
 def get_config():
