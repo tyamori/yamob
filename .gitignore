@@ -43,3 +43,12 @@ Thumbs.db
 
 # Documentation / Non-code files
 /docs/ 
+
+# Terraform specific files
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+crash.log
+crash.*.log
+*.diag.* 
