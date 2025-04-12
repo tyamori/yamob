@@ -4,6 +4,6 @@ import App from './App';
 
 test('renders updated UI content', () => {
   render(<App />);
-  const updatedElement = screen.getByText(/new ui content/i); // Replace with actual updated text
+  const updatedElement = screen.getByText(/yamob/i); // Updated to match actual UI text
   expect(updatedElement).toBeInTheDocument();
 });
