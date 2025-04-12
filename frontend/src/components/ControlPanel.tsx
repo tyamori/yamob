@@ -40,29 +40,50 @@ const ControlPanel: React.FC<ControlPanelProps> = ({ onStart, onStop, onReset, i
   };
 
   return (
-    <div style={{ width: '30%', border: '1px solid lightgray', padding: '10px' }}>
-      <h2>操作パネル</h2>
-      {/* 人数が0以下、または実行中は開始ボタンを無効化 */}
-      <button onClick={onStart} disabled={isRunning || numPersons <= 0}>開始</button>
-      <button onClick={onStop} disabled={!isRunning}>停止</button>
-      {/* 人数が0以下の場合はリセットボタンを無効化 */}
-      <button onClick={handleResetClick} disabled={numPersons <= 0}>リセット</button>
-      <hr />
-      {/* パラメータ設定 UI */}
+    // 基本的なパディングと境界線のみ
+    <div className="p-4 border border-gray-400">
+      <h2 className="text-lg font-bold mb-3">操作パネル</h2>
+      <div className="space-y-2">
+        {/* ボタン: 基本的なスタイルと無効状態のみ */}
+        <button
+          onClick={onStart}
+          disabled={isRunning || numPersons <= 0}
+          className={`w-full px-3 py-1 rounded ${isRunning || numPersons <= 0 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-500 text-white hover:bg-blue-600'}`}
+        >
+          開始
+        </button>
+        <button
+          onClick={onStop}
+          disabled={!isRunning}
+          className={`w-full px-3 py-1 rounded ${!isRunning ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-gray-500 text-white hover:bg-gray-600'}`}
+        >
+          停止
+        </button>
+        <button
+          onClick={handleResetClick}
+          disabled={numPersons <= 0}
+          className={`w-full px-3 py-1 rounded ${numPersons <= 0 ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-red-500 text-white hover:bg-red-600'}`}
+        >
+          リセット
+        </button>
+      </div>
+      <hr className="my-3" />
       <div>
-        <label htmlFor="numPersonsInput" style={{ marginRight: '5px' }}>人数:</label>
+        <label htmlFor="numPersonsInput" className="block text-sm mb-1">
+          人数:
+        </label>
         <input
           id="numPersonsInput"
           type="number"
-          value={numPersons === 0 ? '' : numPersons} // 0 なら空文字表示
+          value={numPersons === 0 ? '' : numPersons}
           onChange={handleNumPersonsChange}
-          min="1" // HTML5 の最小値バリデーション
-          style={{ width: "60px" }}
-          disabled={isRunning} // 実行中は無効化
+          min="1"
+          // 基本的な入力欄スタイル
+          className={`w-20 px-2 py-1 border border-gray-300 rounded ${isRunning ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+          disabled={isRunning}
+          placeholder="1以上"
         />
       </div>
-      {/* TODO: パラメータ設定 UI を追加 */}
-      {/* <p>設定項目など</p> */}
     </div>
   );
 };

@@ -79,7 +79,7 @@ interface SimulationCanvasProps {
 
 const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environment }) => {
   return (
-    <div style={{ width: '70%', height: '600px', border: '1px solid black', marginRight: '10px' }}>
+    <div className="w-full h-full">
       {/* カメラ位置調整 (全体が見えるように) */}
       <Canvas camera={{ position: [5, 20, 15], fov: 60 }}>
         <ambientLight intensity={0.6} />

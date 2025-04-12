@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import io, { Socket } from 'socket.io-client';
-import './App.css';
+// import logo from './logo.svg';
+// import './App.css';
 import SimulationCanvas from './components/SimulationCanvas';
 import ControlPanel from './components/ControlPanel';
+// import { SimulationState, Person, Environment } from './types'; // Temporarily commented out as types file/dir not found
 
 // --- 型定義 ---
 // バックエンドからの生データ形式に合わせた型 (オプショナル)
@@ -41,11 +43,11 @@ interface SimulationState {
 }
 // --- 型定義ここまで ---
 
-// Socket.IO サーバーの URL (バックエンドと同じポート)
-const SOCKET_SERVER_URL = 'http://localhost:5001';
+// Socket.IO サーバーの URL (バックエンドと同じポート) - プロキシを使うので不要になる可能性あり
+// const SOCKET_SERVER_URL = 'http://localhost:5001';
 
-// --- API & Socket URLs ---
-const API_BASE_URL = 'http://localhost:5001/api'; // API ベース URL を追加
+// --- API & Socket URLs --- - プロキシを使うので不要
+// const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 function App() {
   // 初期状態を定義
@@ -67,7 +69,8 @@ function App() {
   // --- API ハンドラ関数 ---
   const handleStart = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/simulation/start`, { method: 'POST' });
+      // API_BASE_URL を削除し、プロキシ経由の相対パスを使用
+      const response = await fetch(`/api/simulation/start`, { method: 'POST' });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -81,7 +84,8 @@ function App() {
 
   const handleStop = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/simulation/stop`, { method: 'POST' });
+      // API_BASE_URL を削除し、プロキシ経由の相対パスを使用
+      const response = await fetch(`/api/simulation/stop`, { method: 'POST' });
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -93,15 +97,15 @@ function App() {
     }
   };
 
-  const handleReset = async (numPersons: number) => { // 引数で人数を受け取る
+  const handleReset = async (numPersons: number) => {
     console.log(`Resetting simulation with ${numPersons} persons...`);
     try {
-      const response = await fetch(`${API_BASE_URL}/simulation/reset`, {
+      // API_BASE_URL を削除し、プロキシ経由の相対パスを使用
+      const response = await fetch(`/api/simulation/reset`, {
          method: 'POST',
          headers: {
              'Content-Type': 'application/json',
          },
-         // リクエストボディに人数を含める
          body: JSON.stringify({ num_persons: numPersons })
       });
       if (!response.ok) {
@@ -117,59 +121,16 @@ function App() {
     }
   };
 
+  // --- useEffect (WebSocket 関連) ---
   useEffect(() => {
-    // Socket.IO サーバーに接続
-    // 既に接続済み、または接続試行中なら何もしない (再レンダリング対策)
-    if (socketRef.current) return;
-
-    socketRef.current = io(SOCKET_SERVER_URL, {
-        reconnectionAttempts: 5, // 再接続試行回数
-        reconnectionDelay: 1000, // 再接続遅延 (ms)
-    });
-    console.log('Connecting to Socket.IO server...');
-
-    const socket = socketRef.current; // 以降 socket 変数でアクセス
-
-    // 接続成功時の処理
-    socket.on('connect', () => {
-      console.log('Connected to Socket.IO server with id:', socket.id);
-    });
-
-    // 'simulation_state_update' イベントをリッスン
-    socket.on('simulation_state_update', (newState: RawSimulationState) => {
-      // バックエンドからのデータ形式に合わせて変換
-      const formattedState: SimulationState = {
-          ...newState,
-          environment: {
-              walls: newState.environment.walls.map((w) => ({ start: { position: w[0] }, end: { position: w[1] } })),
-              obstacles: newState.environment.obstacles.map((o) => ({ center: { position: [o[0], o[1]] }, radius: o[2] }))
-          }
-      };
-      setSimulationState(formattedState);
-      // WebSocket で状態更新があった場合も ControlPanel の人数を同期する
-      setInitialNumPersons(formattedState.persons.length);
-    });
-
-    // エラーハンドリング
-    socket.on('connect_error', (err) => {
-      console.error('Socket.IO connection error:', err.message);
-    });
-
-    socket.on('disconnect', (reason) => {
-        console.log('Disconnected from Socket.IO server:', reason);
-        // 再接続ロジックは socket.io-client が自動で行うが、必要ならここで追加処理
-    });
-
-    // WebSocket 接続時の初期状態取得（APIを叩く）
-    // バックエンドの /api/simulation/state エンドポイントから初期状態を取得
+    // fetchInitialState もプロキシ経由 (/api/simulation/state) を使用
     const fetchInitialState = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/simulation/state`);
+        const response = await fetch(`/api/simulation/state`); // プロキシ経由
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const initialState: RawSimulationState = await response.json();
-        // 状態をフォーマットしてセット
         const formattedState: SimulationState = {
           ...initialState,
           environment: {
@@ -178,46 +139,89 @@ function App() {
           }
         };
         setSimulationState(formattedState);
-        // ControlPanel の初期人数も設定
         setInitialNumPersons(formattedState.persons.length);
         console.log('Fetched initial state:', formattedState);
       } catch (error) {
         console.error("Failed to fetch initial state:", error);
-        // エラー時もデフォルト値で初期化される
-        setInitialNumPersons(10); // エラー時はデフォルト値に戻す
+        setInitialNumPersons(10);
       }
     };
+    fetchInitialState();
 
-    fetchInitialState(); // 初回マウント時に実行
+    // Socket.IO 接続 (引数なしでプロキシ経由 - vite.config.ts の設定に依存)
+    socketRef.current = io({ // 引数を空にする
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
+    });
+    console.log('Connecting to Socket.IO server via proxy...');
+    const socket = socketRef.current;
 
-    // コンポーネントのアンマウント時に切断
+    // ... (socket.on イベントリスナー - 変更なし) ...
+    socket.on('connect', () => {
+      console.log('Connected to Socket.IO server with id:', socket.id);
+    });
+    socket.on('simulation_state_update', (newState: RawSimulationState) => {
+      const formattedState: SimulationState = {
+         ...newState,
+          environment: {
+              walls: newState.environment.walls.map((w) => ({ start: { position: w[0] }, end: { position: w[1] } })),
+              obstacles: newState.environment.obstacles.map((o) => ({ center: { position: [o[0], o[1]] }, radius: o[2] }))
+          }
+      };
+      setSimulationState(formattedState);
+      setInitialNumPersons(formattedState.persons.length);
+    });
+    socket.on('connect_error', (err) => {
+      console.error('Socket.IO connection error:', err.message);
+    });
+    socket.on('disconnect', (reason) => {
+        console.log('Disconnected from Socket.IO server:', reason);
+    });
+
     return () => {
       console.log('Disconnecting from Socket.IO server...');
       socket.disconnect();
-      socketRef.current = null; // ref をクリア
+      socketRef.current = null;
     };
-  }, []); // マウント時に一度だけ実行
+  }, []);
 
   return (
-    <div className="App">
-      <h1>人流シミュレーター</h1>
-      <p>Simulation Time: {simulationState.time.toFixed(2)}</p>
-      <p>Status: {simulationState.is_running ? 'Running' : 'Stopped'}</p>
-      <div style={{ display: 'flex' }}>
-        {/* environment データも渡す */}
-        <SimulationCanvas
-          persons={simulationState.persons}
-          environment={simulationState.environment}
-        />
-        {/* ControlPanel にハンドラ関数と is_running 状態を渡す */}
-        <ControlPanel
-          onStart={handleStart}
-          onStop={handleStop}
-          onReset={handleReset}
-          isRunning={simulationState.is_running}
-          initialNumPersons={initialNumPersons}
-        />
-      </div>
+    <div className="flex flex-col h-screen bg-gray-900 text-gray-100">
+      <header className="text-center py-6 px-4 sm:px-6 lg:px-8 flex-shrink-0 border-b border-gray-700">
+        <h1 className="text-3xl font-bold mb-2">yamob</h1>
+        <p className="text-sm text-gray-500 mb-4">"Yet Another Mobility". It is library for mobility simulator.</p>
+        <div className="flex justify-center items-center gap-4 text-base">
+          <span className="bg-gray-700 px-3 py-1 rounded">
+            Time: {simulationState.time.toFixed(2)}s
+          </span>
+          <span className={`px-3 py-1 rounded ${simulationState.is_running ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
+            Status: {simulationState.is_running ? 'Running' : 'Stopped'}
+          </span>
+        </div>
+      </header>
+      <main className="flex flex-1 overflow-hidden p-6 gap-6">
+        <div className="flex-1 flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+          <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600">Simulation View</h2>
+          <div className="flex-1 relative p-4">
+            <SimulationCanvas
+              persons={simulationState.persons}
+              environment={simulationState.environment}
+            />
+          </div>
+        </div>
+        <div className="w-72 flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-y-auto">
+          <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600 sticky top-0 z-10">Controls</h2>
+          <div className="p-4">
+            <ControlPanel
+              onStart={handleStart}
+              onStop={handleStop}
+              onReset={handleReset}
+              isRunning={simulationState.is_running}
+              initialNumPersons={initialNumPersons}
+            />
+          </div>
+        </div>
+      </main>
     </div>
   );
 }
