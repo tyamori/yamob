@@ -98,8 +98,9 @@ interface SimulationCanvasProps {
 }
 
 const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environment, destinations }) => {
-  console.log("Canvas received destinations:", destinations); // ★ デバッグログ追加
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  if (process.env.NODE_ENV !== 'production') {
+    console.log("Canvas received destinations:", destinations); // ★ デバッグログ追加
+  }
   const containerRef = useRef<HTMLDivElement>(null);
 
   // --- Drawing Logic ---
