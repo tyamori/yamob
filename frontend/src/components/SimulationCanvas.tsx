@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Line } from '@react-three/drei'; // Line をインポート
+import { Line, OrbitControls } from '@react-three/drei'; // Line と OrbitControls をインポート
 
 // --- 型定義 (App.tsx と合わせる) ---
 interface Vector2D {
@@ -80,8 +80,8 @@ interface SimulationCanvasProps {
 const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environment }) => {
   return (
     <div className="w-full h-full">
-      {/* カメラ位置調整 (全体が見えるように) */}
-      <Canvas camera={{ position: [5, 20, 15], fov: 60 }}>
+      {/* Lowered camera Y, moved Z back, set OrbitControls target */}
+      <Canvas camera={{ position: [5, 10, 18], fov: 55 }}>
         <ambientLight intensity={0.6} />
         <directionalLight position={[10, 10, 5]} intensity={1} />
 
@@ -104,8 +104,8 @@ const SimulationCanvas: React.FC<SimulationCanvasProps> = ({ persons, environmen
           <PersonAgent key={person.id} personData={person} />
         ))}
 
-        {/* <SpinningBox /> */} {/* 動作確認用キューブは削除 */}
-
+        {/* Set OrbitControls target to the center of the ground plane */}
+        <OrbitControls target={[5, 0, 5]} />
       </Canvas>
     </div>
   );

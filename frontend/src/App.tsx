@@ -4,6 +4,7 @@ import io, { Socket } from 'socket.io-client';
 // import './App.css';
 import SimulationCanvas from './components/SimulationCanvas';
 import ControlPanel from './components/ControlPanel';
+import { ArrowPathIcon } from '@heroicons/react/24/solid';
 // import { SimulationState, Person, Environment } from './types'; // Temporarily commented out as types file/dir not found
 
 // --- 型定義 ---
@@ -185,24 +186,44 @@ function App() {
     };
   }, []);
 
+  // Handler for number of persons change from ControlPanel
+  const handleNumPersonsChange = (newNumPersons: number) => {
+    // Currently, reset is the only way to change numPersons in backend
+    handleReset(newNumPersons);
+  };
+
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100">
-      <header className="text-center py-6 px-4 sm:px-6 lg:px-8 flex-shrink-0 border-b border-gray-700">
-        <h1 className="text-3xl font-bold mb-2">yamob</h1>
-        <p className="text-sm text-gray-500 mb-4">"Yet Another Mobility". It is library for mobility simulator.</p>
-        <div className="flex justify-center items-center gap-4 text-base">
+      <header className="text-center py-4 px-4 sm:px-6 lg:px-8 flex-shrink-0 border-b border-gray-700">
+        <h1 className="text-3xl font-bold mb-1">yamob</h1>
+        <p className="text-sm text-gray-500 mb-3">"Yet Another Mobility". It is library for mobility simulator.</p>
+        {/* Centered container for time, status toggle, and reset */}
+        <div className="flex justify-center items-center gap-3 text-base">
+          {/* Time Display */}
           <span className="bg-gray-700 px-3 py-1 rounded">
             Time: {simulationState.time.toFixed(2)}s
           </span>
-          <span className={`px-3 py-1 rounded ${simulationState.is_running ? 'bg-green-600 text-white' : 'bg-red-600 text-white'}`}>
-            Status: {simulationState.is_running ? 'Running' : 'Stopped'}
-          </span>
+          {/* Start/Stop Toggle Button */}
+          <button
+            onClick={simulationState.is_running ? handleStop : handleStart}
+            className={`px-4 py-1 rounded font-semibold ${simulationState.is_running ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-green-600 hover:bg-green-700 text-white'}`}
+          >
+            {simulationState.is_running ? 'Stop' : 'Start'}
+          </button>
+          {/* Reset Button with Icon */}
+          <button
+            onClick={() => handleReset(initialNumPersons)}
+            title="Reset Simulation"
+            className="p-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white"
+          >
+            <ArrowPathIcon className="h-5 w-5" />
+          </button>
         </div>
       </header>
-      <main className="flex flex-1 overflow-hidden p-6 gap-6">
+      <main className="flex flex-1 overflow-hidden p-6 gap-6 min-h-0">
         <div className="flex-1 flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-hidden">
           <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600">Simulation View</h2>
-          <div className="flex-1 relative p-4">
+          <div className="flex-1 relative">
             <SimulationCanvas
               persons={simulationState.persons}
               environment={simulationState.environment}
@@ -210,14 +231,13 @@ function App() {
           </div>
         </div>
         <div className="w-72 flex flex-col bg-gray-800 rounded-lg shadow-lg overflow-y-auto">
-          <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600 sticky top-0 z-10">Controls</h2>
+          {/* Changed title to Conditions and adjusted sticky header */}
+          <h2 className="text-xl font-semibold p-4 bg-gray-700 border-b border-gray-600 sticky top-0 z-10">Conditions</h2>
           <div className="p-4">
+            {/* Pass updated props to ControlPanel */}
             <ControlPanel
-              onStart={handleStart}
-              onStop={handleStop}
-              onReset={handleReset}
-              isRunning={simulationState.is_running}
               initialNumPersons={initialNumPersons}
+              onNumPersonsChange={handleNumPersonsChange} // Pass the new handler
             />
           </div>
         </div>

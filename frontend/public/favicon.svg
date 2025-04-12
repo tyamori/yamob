@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="32" height="32">
+  <rect width="100" height="100" fill="#111827" /> <!-- Dark background (gray-900) -->
+  <text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" font-size="70" font-weight="bold" fill="#f3f4f6" font-family="sans-serif">
+    Y
+  </text>
+</svg> 
