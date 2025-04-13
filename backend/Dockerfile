@@ -34,7 +34,7 @@ EXPOSE 5001
 
 # Run app.py when the container launches using eventlet
 # Use a list format for CMD to avoid shell processing issues
-CMD ["python", "app.py"]
+CMD ["python", "-u", "app.py"]
 
 # Alternative CMD using flask run (might need adjustment for eventlet/socketio):
 # CMD ["flask", "run", "--host=0.0.0.0", "--port=5001"] 
