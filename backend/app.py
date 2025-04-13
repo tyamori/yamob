@@ -283,11 +283,13 @@ def get_simulation_state():
 # --- SocketIO イベントハンドラ (接続/切断など、必要に応じて追加) ---
 @socketio.on('connect')
 def handle_connect():
+    print(f'>>> CONNECT event received for SID: {request.sid}')
     print(f'Client connected: {request.sid}')
     # 接続時に現在の状態を送る
     with simulator_lock:
         state = simulator.get_state()
     emit('simulation_state_update', state, to=request.sid)
+    print(f'<<< Sent initial state to SID: {request.sid}')
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -295,9 +297,12 @@ def handle_disconnect():
 
 # --- アプリケーション実行 (socketio.run に変更) ---
 if __name__ == '__main__':
+    print(">>> Before socketio.run()")
     print("Starting Flask-SocketIO app with eventlet...")
     # host='0.0.0.0' を指定して外部からの接続を受け付ける
     # port は 5001 のまま
-    socketio.run(app, host='0.0.0.0', port=5001, debug=False)
+    # log_output=True を追加して詳細ログを試す
+    socketio.run(app, host='0.0.0.0', port=5001, debug=False, log_output=True)
+    print("<<< After socketio.run() (This should not be reached if server runs indefinitely)")
     # 注意: Flask-SocketIO + eventlet/gevent では Flask の debug=True は推奨されない
     # リローダーは use_reloader=False 相当になるはず 
