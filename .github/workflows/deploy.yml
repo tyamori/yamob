@@ -33,4 +33,4 @@ jobs:
       
       - name: Update ECS service
         run: |
-          aws ecs update-service --cluster yamob-backend --service yamob-backend-service --force-new-deployment 
+          aws ecs update-service --cluster yamob-backend-cluster --service yamob-backend-service --force-new-deployment 
