@@ -5,6 +5,10 @@ resource "aws_amplify_app" "yamob_app" {
   repository   = "https://github.com/tyamori/yamob"
   access_token = var.github_token
 
+  environment_variables = {
+    VITE_SOCKET_URL = "http://${aws_lb.yamob_backend_alb.dns_name}"
+  }
+
   build_spec = <<-EOT
     version: 1
     frontend:

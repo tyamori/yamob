@@ -31,11 +31,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build project
-        run: npm run build
-        env:
-          VITE_SOCKET_URL: http://yamob-backend-alb-496574267.ap-northeast-1.elb.amazonaws.com
-
       - name: Run tests
         run: npm run test
         env:
