@@ -61,9 +61,9 @@ interface SimulationState {
 }
 // --- 型定義ここまで ---
 
-// WebSocketサーバーのURL (環境変数から取得するか、デフォルト値を設定)
-// Linter Error: Cannot find name 'process' -> Use import.meta.env for Vite
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001';
+// WebSocketサーバーのURL (Amplifyのプロキシ経由で同じオリジンに接続)
+// const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5001'; // 修正前
+const SOCKET_URL = ''; // 修正後: 空文字列にして相対パスで接続
 
 // Linter Error 修正: 重複定義を削除
 // type SimulationState = any;

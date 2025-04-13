@@ -313,4 +313,114 @@ resource "aws_ecs_service" "yamob_backend_service" {
   lifecycle {
     ignore_changes = [task_definition] # タスク定義の変更はデプロイプロセスで管理されるため
   }
+}
+
+# --- ACM Certificate ---
+resource "aws_acm_certificate" "api_cert" {
+  domain_name       = "api.yamob.net" # 取得したドメイン名に変更
+  validation_method = "DNS"
+
+  tags = {
+    Project   = "Yamob"
+    ManagedBy = "Terraform"
+    Service   = "Backend"
+  }
+
+  lifecycle {
+    create_before_destroy = true # 証明書の更新時にダウンタイムを避ける
+  }
+}
+
+# --- Route 53 Zone Data Source ---
+# 追加: yamob.net のホストゾーン情報を取得
+data "aws_route53_zone" "yamob_zone" {
+  name         = "yamob.net." # 末尾のドットに注意
+  private_zone = false
+}
+
+# --- Route 53 Record for ACM Validation ---
+# 追加: ACM DNS 検証用の CNAME レコードを作成
+resource "aws_route53_record" "cert_validation" {
+  # ACM証明書リソースの domain_validation_options はリストだが、
+  # サブドメインなし(yamob.net)や SAN がなければ通常最初の要素[0]でOK
+  # 複数のドメイン/SANがある場合は for_each を使う必要がある
+  for_each = {
+    for dvo in aws_acm_certificate.api_cert.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true # Terraform 外でレコードが存在した場合に上書きを許可
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60 # 検証用レコードのTTLは短くても良い
+  type            = each.value.type
+  zone_id         = data.aws_route53_zone.yamob_zone.zone_id # データソースからゾーンIDを取得
+}
+
+# --- ACM Certificate Validation ---
+# 修正: validation_record_fqdns を追加
+resource "aws_acm_certificate_validation" "api_cert" {
+  certificate_arn         = aws_acm_certificate.api_cert.arn
+  # 作成した Route 53 レコードの FQDN を参照
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+}
+
+# --- ALB Listener (HTTPS) ---
+resource "aws_lb_listener" "https_listener" {
+  load_balancer_arn = aws_lb.yamob_backend_alb.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08" # 推奨されるセキュリティポリシー
+  # 修正: 検証リソースの証明書ARNを参照する
+  certificate_arn   = aws_acm_certificate_validation.api_cert.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.yamob_backend_tg.arn
+  }
+
+  tags = {
+    Project   = "Yamob"
+    ManagedBy = "Terraform"
+    Service   = "Backend"
+  }
+}
+
+# --- ALB Listener Rule (HTTP to HTTPS Redirect) ---
+# 既存の aws_lb_listener.http_listener リソースにルールを追加
+resource "aws_lb_listener_rule" "http_to_https_redirect" {
+  listener_arn = aws_lb_listener.http_listener.arn # 既存のHTTPリスナーを参照
+  priority     = 100 # ルールの優先度 (他のルールがなければこれでOK)
+
+  action {
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301" # 永続的なリダイレクト
+    }
+  }
+
+  condition {
+    path_pattern {
+      values = ["/*"] # すべてのパスに適用
+    }
+  }
+}
+
+# --- Route 53 A Record for ALB ---
+# 追加: api.yamob.net が ALB を指すように A レコード (エイリアス) を作成
+resource "aws_route53_record" "api_alb_alias" {
+  zone_id = data.aws_route53_zone.yamob_zone.zone_id
+  name    = "api.yamob.net"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.yamob_backend_alb.dns_name # ALB の DNS 名
+    zone_id                = aws_lb.yamob_backend_alb.zone_id  # ALB のホストゾーン ID
+    evaluate_target_health = true                             # ALB のヘルス状態を評価
+  }
 } 

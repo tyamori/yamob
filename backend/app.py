@@ -15,9 +15,23 @@ import copy
 
 # --- Flask アプリケーション設定 ---
 app = Flask(__name__)
-# SocketIO の設定を追加 (CORS を許可)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
-CORS(app) # コメント解除して Flask アプリ全体で CORS を有効化
+
+# 許可するオリジンをリストで指定
+allowed_origins = [
+    # Amplify のドメインパターン
+    "https://*.amplifyapp.com",
+    # ローカル開発用
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # 将来的に設定する可能性のあるカスタムドメインも念のため追加しておく場合
+    # "https://yamob.net",
+    # "https://www.yamob.net",
+]
+# print(f"Allowed Origins: {allowed_origins}") # デバッグ用
+
+# SocketIO の設定を修正 (特定のオリジンのみ許可)
+socketio = SocketIO(app, cors_allowed_origins=allowed_origins, async_mode='eventlet')
+# CORS(app) # Flask-SocketIO が CORS ヘッダーを処理するのでコメントアウトまたは削除推奨
 
 # --- シミュレーターとスレッド管理 ---
 loader = DataLoader()
