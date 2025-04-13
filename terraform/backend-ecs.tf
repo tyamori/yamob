@@ -58,7 +58,7 @@ resource "aws_ecs_task_definition" "yamob_backend_task" {
   container_definitions = jsonencode([
     {
       name      = "yamob-backend" # コンテナ名
-      image     = "${aws_ecr_repository.yamob_backend_repo.repository_url}:latest" # ECRリポジトリ + タグ (latest は例)
+      image     = "${aws_ecr_repository.yamob_backend_repo.repository_url}:v1.1-debug" # タグを変更
       essential = true           # このコンテナが停止したらタスク全体も停止
       portMappings = [
         {
