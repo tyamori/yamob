@@ -119,6 +119,12 @@ data "aws_subnets" "default" {
 resource "aws_ecs_cluster" "yamob_backend_cluster" {
   name = "yamob-backend-cluster"
 
+  # 追加: Container Insights を有効化
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+
   tags = {
     Project   = "Yamob"
     ManagedBy = "Terraform"
@@ -141,6 +147,16 @@ resource "aws_security_group" "alb_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"] # Allow traffic from any IPv4 address
     ipv6_cidr_blocks = ["::/0"]   # Allow traffic from any IPv6 address
+  }
+
+  # 追加: HTTPS 用の ingress ルール
+  ingress {
+    description = "HTTPS from anywhere"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    ipv6_cidr_blocks = ["::/0"]
   }
 
   egress {
